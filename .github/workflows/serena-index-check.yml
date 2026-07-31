@@ -28,10 +28,36 @@ jobs:
           key: ${{ runner.os }}-serena-${{ hashFiles('**/package.json','**/Cargo.toml') }}
 
       - name: Index project
-        run: python -m serena project index .
+        run: |
+          python - <<'PY'
+          import sys
+          from importlib.metadata import entry_points
+          eps = entry_points().select(group='console_scripts')
+          for ep in eps:
+              if ep.name == 'serena':
+                  func = ep.load()
+                  sys.argv = ['serena','project','index','.']
+                  func()
+                  break
+          else:
+              raise SystemExit('serena entry point not found')
+          PY
 
       - name: Memories check
-        run: python -m serena memories check
+        run: |
+          python - <<'PY'
+          import sys
+          from importlib.metadata import entry_points
+          eps = entry_points().select(group='console_scripts')
+          for ep in eps:
+              if ep.name == 'serena':
+                  func = ep.load()
+                  sys.argv = ['serena','memories','check']
+                  func()
+                  break
+          else:
+              raise SystemExit('serena entry point not found')
+          PY
 
       - name: Save serena cache
         if: always()
