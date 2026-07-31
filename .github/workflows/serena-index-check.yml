@@ -1,8 +1,7 @@
 name: Serena index & check
 
 env:
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
 on:
   pull_request:
   push:
