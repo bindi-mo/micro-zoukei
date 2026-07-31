@@ -1949,7 +1949,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "micro-studio-agent"
+name = "micro-zoukei"
 version = "0.1.0"
 dependencies = [
  "serde",
