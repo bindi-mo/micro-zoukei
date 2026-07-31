@@ -1,0 +1,41 @@
+name: Serena index & check
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  serena-index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install serena (if missing)
+        run: |
+          python -m pip install --upgrade pip
+          pip install serena || true
+
+      - name: Restore serena cache
+        uses: actions/cache@v4
+        with:
+          path: .serena
+          key: ${{ runner.os }}-serena-${{ hashFiles('**/package.json','**/Cargo.toml') }}
+
+      - name: Index project
+        run: serena project index .
+
+      - name: Memories check
+        run: serena memories check
+
+      - name: Save serena cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: .serena
+          key: ${{ runner.os }}-serena-${{ hashFiles('**/package.json','**/Cargo.toml') }}
