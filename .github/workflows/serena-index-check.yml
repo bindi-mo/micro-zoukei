@@ -9,10 +9,10 @@ jobs:
   serena-index:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -22,7 +22,7 @@ jobs:
           pip install serena || true
 
       - name: Restore serena cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .serena
           key: ${{ runner.os }}-serena-${{ hashFiles('**/package.json','**/Cargo.toml') }}
@@ -35,7 +35,7 @@ jobs:
 
       - name: Save serena cache
         if: always()
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .serena
           key: ${{ runner.os }}-serena-${{ hashFiles('**/package.json','**/Cargo.toml') }}
