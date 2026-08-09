@@ -20,6 +20,20 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+warp = { version = "0.3", default-features = false, features = ["websocket"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+tokio = { version = "1", features = ["full"] }
+mime_guess = "2.0"
+http = { version = "0.2", default-features = false }
+notify = "6.1"
+hyper = { version = "0.14", features = ["full"] }
+blake3 = "1.5"
+chrono = "0.4"
+futures-util = "0.3"
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 
+# We remove the invalid [patch.package] and ensure dependencies are consistent.
+# The mismatch between warp (http 0.2) and reqwest/hyper (http 1.x) is often solved
+# by ensuring all crates pull the same version of 'http' or using explicit types.

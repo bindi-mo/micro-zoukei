@@ -1,9 +1,5 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
-import App from "./App";
+// This file is kept for minimum initialization or as a placeholder, 
+// but no React root is mounted since we are serving microstudio.dev via the proxy.
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+console.log("Frontend entry point initialized (RPC bridge ready).");
+
