@@ -225,7 +225,8 @@ pub fn run() {
                 }
                 Err(e) => {
                     eprintln!("[tauri] Failed to start proxy: {}", e);
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()).into());
+                    return Err(std::io::Error::other(e.to_string()).into());
+
                 }
             }
 

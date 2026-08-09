@@ -5,11 +5,7 @@ use serde_json::json;
 // Helper to resolve paths
 fn resolve_path(path: &str) -> Result<PathBuf, String> {
     let mut full_path = PathBuf::from("_data");
-    if path.starts_with('/') {
-        full_path.push(&path[1..]);
-    } else {
-        full_path.push(path);
-    }
+    full_path.push(path.strip_prefix('/').unwrap_or(path));
 
     if !full_path.is_absolute() {
         let mut root = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -23,7 +19,7 @@ fn resolve_path(path: &str) -> Result<PathBuf, String> {
 pub async fn mzd_list_files(_group_id: String, path: String) -> Result<serde_json::Value, String> {
     let full_path = resolve_path(&path)?;
     let mut files = Vec::new();
-    
+
     let mut entries = fs::read_dir(full_path).await.map_err(|e| e.to_string())?;
     while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
         let e = entry;

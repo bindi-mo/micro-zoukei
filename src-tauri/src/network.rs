@@ -2,6 +2,12 @@ pub struct NetworkClient {
     client: reqwest::Client,
 }
 
+impl Default for NetworkClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NetworkClient {
     pub fn new() -> Self {
         Self {
