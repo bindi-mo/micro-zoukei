@@ -37,6 +37,15 @@ fn ws_proxy_origin(origin: &str) -> String {
     }
 }
 
+fn should_cache_content_type(content_type: &str) -> bool {
+    let normalized = content_type.to_lowercase();
+    normalized.starts_with("image/")
+        || normalized.starts_with("font/")
+        || normalized.contains("css")
+        || normalized.contains("javascript")
+        || normalized.contains("markdown")
+}
+
 fn should_rewrite_content_type(content_type: &str) -> bool {
     let normalized = content_type.to_lowercase();
     normalized.starts_with("text/")
@@ -384,29 +393,22 @@ self.addEventListener('fetch', (e) => {
     };
 
     // decide whether to cache (simple rule)
-    if enable_proxy_cache() {
-        let cacheable = content_type.starts_with("image/")
-            || content_type.starts_with("font/")
-            || content_type == "text/css"
-            || content_type.starts_with("application/javascript")
-            || content_type == "application/x-javascript";
-
-        if cacheable {
-            // write body and meta atomically
-            let _ = fs::write(&body_path, &final_bytes);
-            let meta = serde_json::json!({
-                "status": status,
-                "content_type": content_type,
-                "fetched_at": Utc::now().to_rfc3339(),
-            });
-            let _ = fs::write(&meta_path, serde_json::to_string(&meta).unwrap_or_default());
-            println!("[proxy] cached: {} -> {}", upstream, body_path.display());
-            // prune cache if over limit
-            if let Err(e) = prune_cache(&cache_dir) {
-                eprintln!("[proxy] prune_cache failed: {}", e);
-            }
+    if enable_proxy_cache() && should_cache_content_type(&content_type) {
+        // write body and meta atomically
+        let _ = fs::write(&body_path, &final_bytes);
+        let meta = serde_json::json!({
+            "status": status,
+            "content_type": content_type,
+            "fetched_at": Utc::now().to_rfc3339(),
+        });
+        let _ = fs::write(&meta_path, serde_json::to_string(&meta).unwrap_or_default());
+        println!("[proxy] cached: {} -> {}", upstream, body_path.display());
+        // prune cache if over limit
+        if let Err(e) = prune_cache(&cache_dir) {
+            eprintln!("[proxy] prune_cache failed: {}", e);
         }
     }
+
 
     let mut synthesized_set_cookie: Vec<String> = Vec::new();
     for (name, val) in headers_map.iter() {
