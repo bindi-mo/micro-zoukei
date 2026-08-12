@@ -7,7 +7,7 @@ MicroZoukei is a tool that bridges the workspace with `microstudio.dev` through 
 ### 1. Proxy Server (`proxy.rs`)
 - **Role**: Acts as the gateway for all web requests.
 - **Asset Priority**: Requests for static assets (`.html`, `.js`, `.css`, etc.) are served directly from the local cache directory (`_data` or `cache_dir`).
-- **Proxy & Injection**: 
+- **Proxy & Injection**:
     - Requests to `microstudio.dev` are proxied through this server.
     - The proxy automatically injects `injected.js` into HTML responses from remote sites, enabling the RPC bridge in the WebView's environment.
 
@@ -41,6 +41,16 @@ MicroZoukei is a tool that bridges the workspace with `microstudio.dev` through 
 - **Version Control**: Commit at logical intervals (one feature/fix per commit). The agent will suggest when a good point to commit is reached.
 - **Error Handling Strategy**: After modifying Rust files, always run `cargo check` or the relevant build command immediately to identify and resolve compiler errors before proceeding with further developments.
 
+# AI Behavioral Rules
+
+## GitHub Issues Rule
+- When asked to create a GitHub Issue or list tasks, always generate and save the issue content as a new Markdown file within the `.github/ISSUES_MSG/` directory (e.g., `.github/ISSUES_MSG/task-01.md`).
+
+## Commit Messages Rule
+- When asked to generate a commit message, do NOT output it just as plain text in the chat.
+- You must directly overwrite and save the message into the standard Git temporary file: `.git/COMMIT_EDITMSG`.
+- This allows the user to immediately finalize the commit without any manual copying and pasting.
+
 ---
-*Last Updated: 2026-08-08*
+*Last Updated: 2026-08-12*
 

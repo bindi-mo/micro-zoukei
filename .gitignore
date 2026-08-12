@@ -28,3 +28,10 @@ dist-ssr
 *.sw?
 *~
 #*#
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.orig
+.github/ISSUES_MSG
