@@ -1,4 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+use std::env;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 #[cfg(debug_assertions)]
@@ -12,6 +13,8 @@ use notify::{recommended_watcher, Config, RecursiveMode, Watcher};
 pub mod network;
 pub mod proxy;
 pub mod commands;
+
+const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
 #[derive(Default)]
 pub struct NavigationState {
@@ -169,24 +172,20 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle) {
                         std::thread::sleep(std::time::Duration::from_millis(100));
                         match read_injected_script() {
                             Ok(script) => inject_updated_script(&app_handle, script),
-                            Err(err) => eprintln!("[tauri] failed to reload injected.js: {}", err),
-                        }
+                            Result::Err(err) => eprintln!("[tauri] failed to reload injected.js: {:?}", err),
+                        };
                     }
                 }
-                Err(err) => {
-                    eprintln!("[tauri] injected.js watch error: {:?}", err);
-                }
+                Result::Err(err) => eprintln!("[tauri] injected.js watcher error: {:?}", err)
             }
         }
     });
 }
 
 fn webview_cache_dir(app_handle: &tauri::AppHandle) -> PathBuf {
-    app_handle
-        .path()
-        .app_data_dir()
-        .expect("failed to resolve app data dir")
-        .join("webview-cache")
+    app_handle.path().app_cache_dir()
+        .expect("[tauri] Failed to resolve cache directory, using default.")
+        .join(format!("{}/webview_cache", APP_NAME))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -222,11 +221,31 @@ pub fn run() {
                         .background_color(Color(15, 23, 42, 255))
                         .initialization_script(init_script)
                         .build()?;
+
+                    // Wait for window to initialize, then navigate through proxy
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+
+                    let app_handle_clone = app.handle().clone();
+                    std::thread::spawn(move || {
+                        // Give the window a moment to initialize
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+
+                        if let Some(window) = app_handle_clone.get_webview_window("main") {
+                            println!("[tauri] Navigating WebView to proxied URL: {}", final_url);
+                            // Navigate through the proxy server - parse URL again for navigate()
+                            if let Ok(url) = Url::parse(&final_url) {
+                                if let Err(e) = window.navigate(url) {
+                                    eprintln!("[tauri] Navigation failed: {}", e);
+                                }
+                            }
+                        } else {
+                            eprintln!("[tauri] Window not found");
+                        }
+                    });
                 }
                 Err(e) => {
                     eprintln!("[tauri] Failed to start proxy: {}", e);
                     return Err(std::io::Error::other(e.to_string()).into());
-
                 }
             }
 
