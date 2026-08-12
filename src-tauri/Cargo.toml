@@ -1,6 +1,6 @@
 [package]
 name = "micro-zoukei"
-version = "0.1.0"
+version = "0.2.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -33,6 +33,7 @@ blake3 = "1.5"
 chrono = "0.4"
 futures-util = "0.3"
 tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+url = "2.5.8"
 
 # We remove the invalid [patch.package] and ensure dependencies are consistent.
 # The mismatch between warp (http 0.2) and reqwest/hyper (http 1.x) is often solved
