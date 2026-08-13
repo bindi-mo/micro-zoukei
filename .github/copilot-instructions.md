@@ -1,9 +1,4 @@
----
-description: "Use when creating commit messages from staged git changes"
-applyTo: '**'
----
-
-# Commit Message Instructions
+## Commit Message Instructions
 
 When asked to create a commit message, follow this process:
 
