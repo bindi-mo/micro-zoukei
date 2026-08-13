@@ -35,6 +35,3 @@ dist-ssr
 *.bak
 *.orig
 .github/ISSUES_MSG
-
-# vite
-src/assets/injected.js
