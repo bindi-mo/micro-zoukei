@@ -25,7 +25,7 @@ const ERROR_STYLE = `
         max-width: 400px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
-    
+
     .${ERROR_CLASS} > button {
         margin-top: 10px;
         padding: 5px 10px;
@@ -35,7 +35,7 @@ const ERROR_STYLE = `
         border-radius: 4px;
         cursor: pointer;
     }
-    
+
     .${ERROR_CLASS} > button:hover {
         background-color: rgba(255, 255, 255, 0.3);
     }
@@ -46,7 +46,7 @@ const ERROR_STYLE = `
  */
 export function showError(options: ErrorOptions): void {
     const container = options?.container || document.querySelector(DEFAULT_CONTAINER);
-    
+
     // Inject styles if not present
     const existingStyle = document.getElementById('micro-zoukei-error-style');
     if (!existingStyle) {
@@ -59,7 +59,7 @@ export function showError(options: ErrorOptions): void {
     // Create error container
     const errorDiv = document.createElement('div');
     errorDiv.className = ERROR_CLASS;
-    
+
     if (options.showDetails) {
         errorDiv.innerHTML = `
             <strong>Error:</strong> ${escapeHtml(options.message)}
@@ -69,8 +69,10 @@ export function showError(options: ErrorOptions): void {
         errorDiv.innerHTML = `<strong>Error:</strong> ${escapeHtml(options.message)}<button onclick="this.parentElement.remove()">×</button>`;
     }
 
-    container.appendChild(errorDiv);
-    
+    if (container) {
+        container.appendChild(errorDiv);
+    }
+
     console.error(`[MicroZoukei] Error:`, options.message);
 }
 

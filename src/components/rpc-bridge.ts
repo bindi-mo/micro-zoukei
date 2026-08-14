@@ -3,7 +3,7 @@
  * Handles all Tauri command invocations from the WebView environment
  */
 
-import type { MicroZoukeiAPI, InvokeOptions } from '../types/injected';
+import type { FileEntry, MicroZoukeiAPI, SyncFilesResponse, SyncProjectResponse } from '../types/injected';
 
 const COMMAND_MAP: Record<string, string> = {
     listFiles: 'mzd_list_files',
@@ -18,9 +18,9 @@ const COMMAND_MAP: Record<string, string> = {
  * Internal function to dispatch commands to the Rust backend.
  * Supports multiple Tauri version injection points.
  */
-async function invokeTauriCommand(options: InvokeOptions): Promise<unknown> {
-    const tauriApi = window.__tauri_prod__ || window.__tauri_2021__ || window.__tauri__;
-    
+async function invokeTauriCommand(options: { commandName: string; args?: any }): Promise<unknown> {
+    const tauriApi = (window as any).__tauri_prod__ || (window as any).__tauri_2021__ || (window as any).__tauri__;
+
     if (!tauriApi) {
         throw new Error('Tauri API not available');
     }
@@ -38,42 +38,55 @@ async function invokeTauriCommand(options: InvokeOptions): Promise<unknown> {
  */
 export const rpcBridge: MicroZoukeiAPI = {
     listFiles: async (path?: string) => {
-        return await invokeTauriCommand({ commandName: 'mzd_list_files', args: { path } });
+        return await invokeTauriCommand({
+            commandName: 'mzd_list_files',
+            args: { path }
+        }) as FileEntry[];
     },
-    
+
     readFile: async (path: string) => {
-        return await invokeTauriCommand({ commandName: 'mzd_read_file', args: { path } });
+        return await invokeTauriCommand({
+            commandName: 'mzd_read_file',
+            args: { path }
+        }) as string;
     },
-    
+
     writeFile: async (path: string, content: string) => {
-        return await invokeTauriCommand({ 
-            commandName: 'mzd_write_file', 
-            args: { path, content } 
-        });
+        return await invokeTauriCommand({
+            commandName: 'mzd_write_file',
+            args: { path, content }
+        }) as boolean;
     },
-    
+
     deleteFile: async (path: string) => {
-        return await invokeTauriCommand({ commandName: 'mzd_delete_file', args: { path } });
+        return await invokeTauriCommand({
+            commandName: 'mzd_delete_file',
+            args: { path }
+        }) as boolean;
     },
-    
+
     syncProject: async (projectId?: string) => {
-        return await invokeTauriCommand({ 
-            commandName: 'mzd_sync_project', 
-            args: projectId ? { projectId } : undefined 
-        });
+        return await invokeTauriCommand({
+            commandName: 'mzd_sync_project',
+            args: projectId ? { projectId } : undefined
+        }) as SyncProjectResponse;
     },
-    
+
     syncFiles: async (projectId: string, path: string) => {
-        return await invokeTauriCommand({ 
-            commandName: 'mzd_sync_files', 
-            args: { projectId, path } 
-        });
+        return await invokeTauriCommand({
+            commandName: 'mzd_sync_files',
+            args: { projectId, path }
+        }) as SyncFilesResponse;
     },
+
+    isReady: () => {
+        return isBridgeReady();
+    }
 };
 
 /**
  * Check if the bridge is initialized.
  */
 export function isBridgeReady(): boolean {
-    return !!(window.__tauri_prod__ || window.__tauri_2021__ || window.__tauri__);
+    return !!(window as any).__tauri_prod__ || (window as any).__tauri_2021__ || (window as any).__tauri__;
 }

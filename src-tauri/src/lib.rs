@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 #[cfg(debug_assertions)]
 use std::sync::mpsc::channel;
-use tauri::{Emitter, Url, WebviewWindowBuilder};
+use tauri::{Url, WebviewWindowBuilder};
 use tauri::window::Color;
 use tauri::Manager;
 #[cfg(debug_assertions)]
@@ -17,47 +17,8 @@ pub mod commands;
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
 #[derive(Default)]
-pub struct NavigationState {
-    frontend_ready: bool,
-    pending_url: Option<String>,
-}
-
-#[derive(Default)]
 pub struct AppState {
     proxy_port: Option<u16>,
-}
-
-#[tauri::command]
-fn mz_frontend_ready(
-    app_handle: tauri::AppHandle,
-    navigation_state: tauri::State<'_, Arc<Mutex<NavigationState>>>,
-) -> Result<(), String> {
-    let pending_url = {
-        let mut state = navigation_state
-            .lock()
-            .map_err(|e| e.to_string())?;
-        state.frontend_ready = true;
-        state.pending_url.take()
-    };
-
-    if let Some(url_string) = pending_url {
-        let url = Url::parse(&url_string).map_err(|e| e.to_string())?;
-        let app_handle_clone = app_handle.clone();
-        let url_string_clone = url_string.clone();
-        app_handle.run_on_main_thread(move || {
-            if let Some(window) = app_handle_clone.get_webview_window("main") {
-                if let Err(e) = window.navigate(url) {
-                    eprintln!("[tauri] navigate failed: {:?}", e);
-                } else {
-                    let _ = app_handle_clone.emit("proxy-ready", url_string_clone.clone());
-                }
-            } else {
-                eprintln!("[tauri] main window not found for navigation");
-            }
-        }).map_err(|e| e.to_string())?;
-    }
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -195,7 +156,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(app_state.clone())
-        .invoke_handler(tauri::generate_handler![send_chat_prompt, mz_frontend_ready])
+        .invoke_handler(tauri::generate_handler![send_chat_prompt])
         .setup(move |app| {
             let cache_dir = webview_cache_dir(app.handle());
             let init_script = include_str!("../../src/assets/injected.js");
