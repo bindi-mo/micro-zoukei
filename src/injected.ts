@@ -13,7 +13,7 @@ import type { MicroZoukeiAPI } from './types/injected';
  * This function should be called when the WebView is ready.
  */
 export function initMicroZoukei(): void {
-    console.log('[MicroZoukei] Initializing...');
+    rpcBridge.logMessage('[MicroZoukei] Initializing...');
 
     // Check if Tauri API is available
     if (!isBridgeReady()) {
@@ -21,14 +21,13 @@ export function initMicroZoukei(): void {
             message: 'Tauri API not available. Please ensure the app is running.',
             showDetails: true,
         });
-        console.error('[MicroZoukei] Tauri API not available');
         return;
     }
 
     // Expose RPC bridge to window object
     (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei = rpcBridge;
 
-    console.log('[MicroZoukei] RPC Bridge initialized successfully.');
+    rpcBridge.logMessage('[MicroZoukei] RPC Bridge initialized successfully.');
 }
 
 /**
@@ -42,7 +41,7 @@ export function cleanupInjectedScript(): void {
         delete (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei;
     }
 
-    console.log('[MicroZoukei] Cleanup completed');
+    rpcBridge.logMessage('[MicroZoukei] Cleanup completed');
 }
 
 /**
@@ -66,8 +65,8 @@ export async function withLoading<T>(
 
 // Auto-initialize when script is injected via inject_updated_script()
 if (typeof window !== 'undefined') {
-    console.log('[MicroZoukei] Injected script loaded');
-    
+    rpcBridge.logMessage('[MicroZoukei] Injected script loaded');
+
     // Tauri API が利用可能なら、すぐに初期化
     if (isBridgeReady()) {
         initMicroZoukei();

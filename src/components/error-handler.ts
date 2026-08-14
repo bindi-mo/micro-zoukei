@@ -3,6 +3,8 @@
  * Handles error display and logging in the WebView environment
  */
 
+import { rpcBridge } from './rpc-bridge';
+
 export interface ErrorOptions {
     container?: HTMLElement;
     message: string;
@@ -73,7 +75,10 @@ export function showError(options: ErrorOptions): void {
         container.appendChild(errorDiv);
     }
 
-    console.error(`[MicroZoukei] Error:`, options.message);
+    // Log to backend asynchronously
+    (async () => {
+        await rpcBridge.logMessage(`[MicroZoukei] Error: ${options.message}`);
+    })();
 }
 
 /**
@@ -82,7 +87,7 @@ export function showError(options: ErrorOptions): void {
 export function hideAllErrors(): void {
     const errorElements = document.querySelectorAll(`.${ERROR_CLASS}`);
     errorElements.forEach(el => el.remove());
-    console.log('[MicroZoukei] All errors dismissed');
+    rpcBridge.logMessage('[MicroZoukei] All errors dismissed');
 }
 
 /**

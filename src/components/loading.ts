@@ -3,6 +3,8 @@
  * Handles display of loading indicators in the WebView environment
  */
 
+import { rpcBridge } from './rpc-bridge';
+
 export interface LoadingOptions {
     container?: HTMLElement;
     message?: string;
@@ -22,7 +24,7 @@ const SPINNER_STYLE = `
         border-top-color: #60a5fa;
         animation: spin 0.8s linear infinite;
     }
-    
+
     @keyframes spin {
         to { transform: rotate(360deg); }
     }
@@ -41,7 +43,7 @@ const CUSTOM_STYLE = `
         justify-content: center;
         z-index: 999999;
     }
-    
+
     .${LOADING_CLASS} > div {
         text-align: center;
         color: #e5e7eb;
@@ -58,7 +60,7 @@ export function showLoading(options?: LoadingOptions): void {
 
     // Check if already showing
     if (document.body.classList.contains(LOADING_CLASS)) {
-        console.log('[MicroZoukei] Loading already visible');
+        rpcBridge.logMessage('[MicroZoukei] Loading already visible');
         return;
     }
 
@@ -74,7 +76,7 @@ export function showLoading(options?: LoadingOptions): void {
     // Create loading container
     const loadingDiv = document.createElement('div');
     loadingDiv.className = LOADING_CLASS;
-    
+
     if (options?.message) {
         loadingDiv.innerHTML = `
             <div>
@@ -87,8 +89,8 @@ export function showLoading(options?: LoadingOptions): void {
     }
 
     container.appendChild(loadingDiv);
-    
-    console.log('[MicroZoukei] Loading indicator shown');
+
+    rpcBridge.logMessage('[MicroZoukei] Loading indicator shown');
 }
 
 /**
@@ -98,7 +100,7 @@ export function hideLoading(): void {
     const loadingElement = document.querySelector(`.${LOADING_CLASS}`);
     if (loadingElement) {
         loadingElement.remove();
-        console.log('[MicroZoukei] Loading indicator hidden');
+        rpcBridge.logMessage('[MicroZoukei] Loading indicator hidden');
     }
 }
 

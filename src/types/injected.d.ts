@@ -28,22 +28,25 @@ export interface SyncFilesResponse {
 export interface MicroZoukeiAPI {
     /** List files in a directory */
     listFiles(path?: string): Promise<FileEntry[]>;
-    
+
     /** Read file content */
     readFile(path: string): Promise<string>;
-    
+
     /** Write file content */
     writeFile(path: string, content: string): Promise<boolean>;
-    
+
     /** Delete a file */
     deleteFile(path: string): Promise<boolean>;
-    
+
     /** Sync project state */
     syncProject(projectId?: string): Promise<SyncProjectResponse>;
-    
+
     /** Sync specific files */
     syncFiles(projectId: string, path: string): Promise<SyncFilesResponse>;
-    
+
+    /** Log a message to the backend */
+    logMessage(message: string): Promise<void>;
+
     /** Check if the bridge is initialized */
     isReady(): boolean;
 }

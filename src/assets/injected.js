@@ -51,12 +51,12 @@ var InjectedScript = (function(exports) {
     if (container) {
       container.appendChild(errorDiv);
     }
-    console.error(`[MicroZoukei] Error:`, options.message);
+    await rpcBridge.logMessage(`[MicroZoukei] Error: ${options.message}`);
   }
   function hideAllErrors() {
     const errorElements = document.querySelectorAll(`.${ERROR_CLASS}`);
     errorElements.forEach((el) => el.remove());
-    console.log("[MicroZoukei] All errors dismissed");
+    rpcBridge.logMessage("[MicroZoukei] All errors dismissed");
   }
   function escapeHtml(text) {
     const div = document.createElement("div");
@@ -76,7 +76,7 @@ var InjectedScript = (function(exports) {
         border-top-color: #60a5fa;
         animation: spin 0.8s linear infinite;
     }
-    
+
     @keyframes spin {
         to { transform: rotate(360deg); }
     }
@@ -94,7 +94,7 @@ var InjectedScript = (function(exports) {
         justify-content: center;
         z-index: 999999;
     }
-    
+
     .${LOADING_CLASS} > div {
         text-align: center;
         color: #e5e7eb;
@@ -105,7 +105,7 @@ var InjectedScript = (function(exports) {
     const container = options?.container || document.querySelector(DEFAULT_CONTAINER);
     if (!container) return;
     if (document.body.classList.contains(LOADING_CLASS)) {
-      console.log("[MicroZoukei] Loading already visible");
+      rpcBridge.logMessage("[MicroZoukei] Loading already visible");
       return;
     }
     const existingStyle = document.getElementById("micro-zoukei-loading-style");
@@ -128,13 +128,13 @@ var InjectedScript = (function(exports) {
       loadingDiv.innerHTML = `<p>Loading...</p>`;
     }
     container.appendChild(loadingDiv);
-    console.log("[MicroZoukei] Loading indicator shown");
+    rpcBridge.logMessage("[MicroZoukei] Loading indicator shown");
   }
   function hideLoading() {
     const loadingElement = document.querySelector(`.${LOADING_CLASS}`);
     if (loadingElement) {
       loadingElement.remove();
-      console.log("[MicroZoukei] Loading indicator hidden");
+      rpcBridge.logMessage("[MicroZoukei] Loading indicator hidden");
     }
   }
   function isLoadingDisplayed() {
@@ -189,6 +189,12 @@ var InjectedScript = (function(exports) {
         args: { projectId, path }
       });
     },
+    logMessage: async (message) => {
+      return await invokeTauriCommand({
+        commandName: "mzd_log_message",
+        args: { message }
+      });
+    },
     isReady: () => {
       return isBridgeReady();
     }
@@ -197,23 +203,22 @@ var InjectedScript = (function(exports) {
     return !!window.__tauri_prod__ || window.__tauri_2021__ || window.__tauri__;
   }
   function initMicroZoukei() {
-    console.log("[MicroZoukei] Initializing...");
+    rpcBridge.logMessage("[MicroZoukei] Initializing...");
     if (!isBridgeReady()) {
       showError({
         message: "Tauri API not available. Please ensure the app is running."
       });
-      console.error("[MicroZoukei] Tauri API not available");
       return;
     }
     window.microZoukei = rpcBridge;
-    console.log("[MicroZoukei] RPC Bridge initialized successfully.");
+    rpcBridge.logMessage("[MicroZoukei] RPC Bridge initialized successfully.");
   }
   function cleanupInjectedScript() {
     hideAllErrors();
     if (window.microZoukei) {
       delete window.microZoukei;
     }
-    console.log("[MicroZoukei] Cleanup completed");
+    rpcBridge.logMessage("[MicroZoukei] Cleanup completed");
   }
   async function withLoading(operation, message) {
     if (!isLoadingDisplayed()) {
@@ -227,7 +232,7 @@ var InjectedScript = (function(exports) {
     }
   }
   if (typeof window !== "undefined") {
-    console.log("[MicroZoukei] Injected script loaded");
+    rpcBridge.logMessage("[MicroZoukei] Injected script loaded");
     if (isBridgeReady()) {
       initMicroZoukei();
     } else {

@@ -12,6 +12,7 @@ const COMMAND_MAP: Record<string, string> = {
     deleteFile: 'mzd_delete_file',
     syncProject: 'mzd_sync_project',
     syncFiles: 'mzd_sync_files',
+    logMessage: 'mzd_log_message',
 };
 
 /**
@@ -77,6 +78,13 @@ export const rpcBridge: MicroZoukeiAPI = {
             commandName: 'mzd_sync_files',
             args: { projectId, path }
         }) as SyncFilesResponse;
+    },
+
+    logMessage: async (message: string): Promise<void> => {
+        await invokeTauriCommand({
+            commandName: 'mzd_log_message',
+            args: { message }
+        });
     },
 
     isReady: () => {

@@ -98,3 +98,9 @@ pub async fn mzd_sync_files(project_id: String, path: String) -> Result<serde_js
         "files_processed": files.len()
     }))
 }
+
+#[tauri::command]
+pub async fn mzd_log_message(_group_id: String, message: String) -> Result<(), String> {
+    println!("[LOG] {}", message);
+    Ok(())
+}
