@@ -3,9 +3,10 @@
  * Combines all modules and initializes the RPC bridge in the WebView environment
  */
 
-import { rpcBridge, isBridgeReady } from './components/rpc-bridge';
-import { showLoading, hideLoading, isLoadingDisplayed } from './components/loading';
-import { showError, hideAllErrors } from './components/error-handler';
+import { hideAllErrors, showError } from './components/error-handler';
+import { hideLoading, isLoadingDisplayed, showLoading } from './components/loading';
+import { isBridgeReady, rpcBridge } from './components/rpc-bridge';
+import type { MicroZoukeiAPI } from './types/injected';
 
 /**
  * Initialize MicroZoukei RPC bridge.
@@ -60,5 +61,17 @@ export async function withLoading<T>(
         return result;
     } finally {
         hideLoading();
+    }
+}
+
+// Auto-initialize when script is injected via inject_updated_script()
+if (typeof window !== 'undefined') {
+    console.log('[MicroZoukei] Injected script loaded');
+    
+    // Tauri API が利用可能なら、すぐに初期化
+    if (isBridgeReady()) {
+        initMicroZoukei();
+    } else {
+        console.warn('[MicroZoukei] Tauri API not yet available. Will initialize when injected.');
     }
 }

@@ -202,6 +202,14 @@ pub fn run() {
                         } else {
                             eprintln!("[tauri] Window not found");
                         }
+
+                        // Inject the script after navigation (instead of using initialization_script)
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        if let Ok(script) = read_injected_script() {
+                            inject_updated_script(&app_handle_clone, script);
+                        } else {
+                            eprintln!("[tauri] Failed to read injected.js");
+                        }
                     });
                 }
                 Err(e) => {
