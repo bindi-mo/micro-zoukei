@@ -159,7 +159,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![send_chat_prompt])
         .setup(move |app| {
             let cache_dir = webview_cache_dir(app.handle());
-            let init_script = include_str!("../../src/assets/injected.js");
+            let init_script = read_injected_script().unwrap_or_else(|_| {
+                eprintln!("[tauri] Failed to read injected.js, using empty script.");
+                String::new()
+            });
 
             // Start proxy and block until its port is ready
             let proxy_cache_dir = cache_dir.clone();
@@ -182,35 +185,6 @@ pub fn run() {
                         .background_color(Color(15, 23, 42, 255))
                         .initialization_script(init_script)
                         .build()?;
-
-                    // Wait for window to initialize, then navigate through proxy
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-
-                    let app_handle_clone = app.handle().clone();
-                    std::thread::spawn(move || {
-                        // Give the window a moment to initialize
-                        std::thread::sleep(std::time::Duration::from_millis(200));
-
-                        if let Some(window) = app_handle_clone.get_webview_window("main") {
-                            println!("[tauri] Navigating WebView to proxied URL: {}", final_url);
-                            // Navigate through the proxy server - parse URL again for navigate()
-                            if let Ok(url) = Url::parse(&final_url) {
-                                if let Err(e) = window.navigate(url) {
-                                    eprintln!("[tauri] Navigation failed: {}", e);
-                                }
-                            }
-                        } else {
-                            eprintln!("[tauri] Window not found");
-                        }
-
-                        // Inject the script after navigation (instead of using initialization_script)
-                        std::thread::sleep(std::time::Duration::from_millis(300));
-                        if let Ok(script) = read_injected_script() {
-                            inject_updated_script(&app_handle_clone, script);
-                        } else {
-                            eprintln!("[tauri] Failed to read injected.js");
-                        }
-                    });
                 }
                 Err(e) => {
                     eprintln!("[tauri] Failed to start proxy: {}", e);
