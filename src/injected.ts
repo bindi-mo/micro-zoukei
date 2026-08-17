@@ -3,10 +3,20 @@
  * Combines all modules and initializes the RPC bridge in the WebView environment
  */
 
+// Proxy port number embedded at boot time (injected by Tauri)
+const PROXY_PORT = 8080;
+
 import { hideAllErrors, showError } from './components/error-handler';
 import { hideLoading, isLoadingDisplayed, showLoading } from './components/loading';
 import { isBridgeReady, rpcBridge } from './components/rpc-bridge';
 import type { MicroZoukeiAPI } from './types/injected';
+
+// Expose getProxyPort to window for RPC bridge to use
+if (typeof window !== 'undefined') {
+    ;(window as any).getProxyPort = async (): Promise<number> => {
+        return PROXY_PORT;
+    };
+}
 
 /**
  * Initialize MicroZoukei RPC bridge.

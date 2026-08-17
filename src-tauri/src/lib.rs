@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 #[cfg(debug_assertions)]
 use std::sync::mpsc::channel;
+
 use tauri::{Url, WebviewWindowBuilder};
 use tauri::window::Color;
 use tauri::Manager;
@@ -13,6 +14,7 @@ use notify::{recommended_watcher, Config, RecursiveMode, Watcher};
 pub mod network;
 pub mod proxy;
 pub mod commands;
+pub mod handlers;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -64,10 +66,20 @@ fn injected_js_source_path() -> PathBuf {
 }
 
 #[cfg(debug_assertions)]
-fn read_injected_script() -> Result<String, String> {
+fn read_injected_script(port: u16) -> Result<String, String> {
     let path = injected_js_source_path();
     eprintln!("[tauri] Attempting to read injected.js from: {:?}", path);
-    std::fs::read_to_string(&path).map_err(|e| format!("failed to read {:?}: {}", path, e))
+
+    // Read the original script
+    let mut script_content = std::fs::read_to_string(&path).map_err(|e| format!("failed to read {:?}: {}", path, e))?;
+
+    // Inject proxy_port constant at the top of the script
+    script_content.insert_str(0, &format!(
+        "// Proxy port number embedded at boot time (injected by Tauri)\nconst PROXY_PORT = {};\n",
+        port
+    ));
+
+    Ok(script_content)
 }
 
 #[cfg(debug_assertions)]
@@ -92,7 +104,9 @@ fn inject_updated_script(app_handle: &tauri::AppHandle, script: String) {
 }
 
 #[cfg(debug_assertions)]
-fn spawn_injected_js_watcher(app_handle: tauri::AppHandle) {
+fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
+    // Clone port for use in the loop (it doesn't implement Copy)
+    let port_clone = port;
     std::thread::spawn(move || {
         let source_path = injected_js_source_path();
         let (tx, rx) = channel();
@@ -131,7 +145,7 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle) {
                         last_reload = now;
                         // A brief buffer to wait for the file writing to complete (avoiding race conditions)
                         std::thread::sleep(std::time::Duration::from_millis(100));
-                        match read_injected_script() {
+                        match read_injected_script(port_clone) {
                             Ok(script) => inject_updated_script(&app_handle, script),
                             Result::Err(err) => eprintln!("[tauri] failed to reload injected.js: {:?}", err),
                         };
@@ -159,21 +173,25 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![send_chat_prompt])
         .setup(move |app| {
             let cache_dir = webview_cache_dir(app.handle());
-            let init_script = read_injected_script().unwrap_or_else(|_| {
-                eprintln!("[tauri] Failed to read injected.js, using empty script.");
-                String::new()
-            });
-
             // Start proxy and block until its port is ready
             let proxy_cache_dir = cache_dir.clone();
+            let mut port: Option<u16> = None;
             match proxy::start_proxy(proxy_cache_dir) {
-                Ok(port) => {
-                    println!("[tauri] Proxy started on port: {}", port);
+                Ok(p) => {
+                    port = Some(p);
+                    println!("[tauri] Proxy started on port: {}", p);
                     let mut state = app_state.lock().unwrap();
-                    state.proxy_port = Some(port);
+                    state.proxy_port = Some(p);
+                    // Clone port for use in read_injected_script (it doesn't implement Copy)
+                    let port_clone = p;
+                    let init_script = read_injected_script(port_clone).unwrap_or_else(|_| {
+                        eprintln!("[tauri] Failed to read injected.js, using empty script.");
+                        String::new()
+                    });
+
 
                     // Navigation URL is now determined by the proxy port from the start, bypassing frontend readiness checks
-                    let final_url = format!("http://127.0.0.1:{}/", port);
+                    let final_url = format!("http://127.0.0.1:{}/", port.unwrap());
                     println!("[tauri] Initial navigation targeting local proxy: {}", final_url);
 
                     WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(Url::parse(&final_url).unwrap()))
@@ -193,7 +211,7 @@ pub fn run() {
             }
 
             #[cfg(debug_assertions)]
-            spawn_injected_js_watcher(app.handle().clone());
+            spawn_injected_js_watcher(app.handle().clone(), port.unwrap());
 
             Ok(())
         })

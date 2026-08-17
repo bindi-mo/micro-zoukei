@@ -1,67 +1,123 @@
 var InjectedScript = (function(exports) {
   "use strict";
-  const DEFAULT_CONTAINER$1 = "body";
-  const ERROR_CLASS = "micro-zoukei-error";
-  const ERROR_STYLE = `
-    .${ERROR_CLASS} {
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background-color: #dc2626;
-        color: white;
-        padding: 15px 20px;
-        border-radius: 8px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-        z-index: 999998;
-        max-width: 400px;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  async function getProxyPort() {
+    if (typeof window !== "undefined") {
+      const win = window;
+      if (win.getProxyPort) {
+        return await win.getProxyPort();
+      }
     }
-
-    .${ERROR_CLASS} > button {
-        margin-top: 10px;
-        padding: 5px 10px;
-        background-color: rgba(255, 255, 255, 0.2);
-        border: none;
-        color: white;
-        border-radius: 4px;
-        cursor: pointer;
-    }
-
-    .${ERROR_CLASS} > button:hover {
-        background-color: rgba(255, 255, 255, 0.3);
-    }
-`;
-  function showError(options) {
-    const container = options?.container || document.querySelector(DEFAULT_CONTAINER$1);
-    const existingStyle = document.getElementById("micro-zoukei-error-style");
-    if (!existingStyle) {
-      const styleSheet = document.createElement("style");
-      styleSheet.id = "micro-zoukei-error-style";
-      styleSheet.textContent = ERROR_STYLE;
-      document.head.appendChild(styleSheet);
-    }
-    const errorDiv = document.createElement("div");
-    errorDiv.className = ERROR_CLASS;
-    {
-      errorDiv.innerHTML = `
-            <strong>Error:</strong> ${escapeHtml(options.message)}
-            <button onclick="this.parentElement.remove()">Dismiss</button>
-        `;
-    }
-    if (container) {
-      container.appendChild(errorDiv);
-    }
-    await rpcBridge.logMessage(`[MicroZoukei] Error: ${options.message}`);
+    return 8080;
   }
+  async function fetchCommand(options) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3e4);
+    try {
+      const port = await getProxyPort();
+      const proxyUrl = `http://127.0.0.1:${port}/api/command`;
+      console.log("[RPC Bridge] Sending command via local proxy:", proxyUrl);
+      const response = await fetch(proxyUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          command: options.commandName,
+          args: options.args || {}
+        }),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Server returned ${response.status}: ${errorText}`);
+      }
+      const result = await response.json();
+      if (!result.success) {
+        let errorMessage = result.error || "Command failed";
+        if (errorMessage.includes("File not found")) {
+          errorMessage = `File not found: ${result.error}`;
+        } else if (errorMessage.includes("Permission denied")) {
+          errorMessage = "Permission denied when accessing the file";
+        } else if (errorMessage.includes("Invalid path")) {
+          errorMessage = "The specified path is invalid";
+        }
+        throw new Error(errorMessage);
+      }
+      return result.data;
+    } catch (error) {
+      console.error(`[MicroZoukei] Error invoking ${options.commandName}:`, error);
+      if (error instanceof TypeError && error.message.includes("fetch")) {
+        throw new Error("Failed to connect to local proxy server. Is the app running?");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+  const rpcBridge = {
+    listFiles: async (path) => {
+      return await fetchCommand({
+        commandName: "mzd_list_files",
+        args: { path }
+      });
+    },
+    readFile: async (path) => {
+      return await fetchCommand({
+        commandName: "mzd_read_file",
+        args: { path }
+      });
+    },
+    writeFile: async (path, content) => {
+      return await fetchCommand({
+        commandName: "mzd_write_file",
+        args: { path, content }
+      });
+    },
+    deleteFile: async (path) => {
+      return await fetchCommand({
+        commandName: "mzd_delete_file",
+        args: { path }
+      });
+    },
+    syncProject: async (projectId) => {
+      return await fetchCommand({
+        commandName: "mzd_sync_project",
+        args: projectId ? { projectId } : void 0
+      });
+    },
+    syncFiles: async (projectId, path) => {
+      return await fetchCommand({
+        commandName: "mzd_sync_files",
+        args: { projectId, path }
+      });
+    },
+    logMessage: async (message) => {
+      await fetchCommand({
+        commandName: "mzd_log_message",
+        args: { message }
+      });
+    },
+    isReady: () => {
+      return isBridgeReady();
+    },
+    getProxyPort: async () => {
+      if (typeof window !== "undefined") {
+        const win = window;
+        if (win.getProxyPort) {
+          return await win.getProxyPort();
+        }
+      }
+      return 8080;
+    }
+  };
+  function isBridgeReady() {
+    return true;
+  }
+  const ERROR_CLASS = "micro-zoukei-error";
   function hideAllErrors() {
     const errorElements = document.querySelectorAll(`.${ERROR_CLASS}`);
     errorElements.forEach((el) => el.remove());
     rpcBridge.logMessage("[MicroZoukei] All errors dismissed");
-  }
-  function escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
   }
   const DEFAULT_CONTAINER = "body";
   const LOADING_CLASS = "micro-zoukei-loading";
@@ -140,76 +196,14 @@ var InjectedScript = (function(exports) {
   function isLoadingDisplayed() {
     return document.body.classList.contains(LOADING_CLASS);
   }
-  async function invokeTauriCommand(options) {
-    const tauriApi = window.__tauri_prod__ || window.__tauri_2021__ || window.__tauri__;
-    if (!tauriApi) {
-      throw new Error("Tauri API not available");
-    }
-    try {
-      return await tauriApi.invoke(options.commandName, options.args);
-    } catch (error) {
-      console.error(`[MicroZoukei] Error invoking ${options.commandName}:`, error);
-      throw error;
-    }
-  }
-  const rpcBridge = {
-    listFiles: async (path) => {
-      return await invokeTauriCommand({
-        commandName: "mzd_list_files",
-        args: { path }
-      });
-    },
-    readFile: async (path) => {
-      return await invokeTauriCommand({
-        commandName: "mzd_read_file",
-        args: { path }
-      });
-    },
-    writeFile: async (path, content) => {
-      return await invokeTauriCommand({
-        commandName: "mzd_write_file",
-        args: { path, content }
-      });
-    },
-    deleteFile: async (path) => {
-      return await invokeTauriCommand({
-        commandName: "mzd_delete_file",
-        args: { path }
-      });
-    },
-    syncProject: async (projectId) => {
-      return await invokeTauriCommand({
-        commandName: "mzd_sync_project",
-        args: projectId ? { projectId } : void 0
-      });
-    },
-    syncFiles: async (projectId, path) => {
-      return await invokeTauriCommand({
-        commandName: "mzd_sync_files",
-        args: { projectId, path }
-      });
-    },
-    logMessage: async (message) => {
-      return await invokeTauriCommand({
-        commandName: "mzd_log_message",
-        args: { message }
-      });
-    },
-    isReady: () => {
-      return isBridgeReady();
-    }
-  };
-  function isBridgeReady() {
-    return !!window.__tauri_prod__ || window.__tauri_2021__ || window.__tauri__;
+  const PROXY_PORT = 8080;
+  if (typeof window !== "undefined") {
+    window.getProxyPort = async () => {
+      return PROXY_PORT;
+    };
   }
   function initMicroZoukei() {
     rpcBridge.logMessage("[MicroZoukei] Initializing...");
-    if (!isBridgeReady()) {
-      showError({
-        message: "Tauri API not available. Please ensure the app is running."
-      });
-      return;
-    }
     window.microZoukei = rpcBridge;
     rpcBridge.logMessage("[MicroZoukei] RPC Bridge initialized successfully.");
   }
@@ -233,10 +227,8 @@ var InjectedScript = (function(exports) {
   }
   if (typeof window !== "undefined") {
     rpcBridge.logMessage("[MicroZoukei] Injected script loaded");
-    if (isBridgeReady()) {
+    {
       initMicroZoukei();
-    } else {
-      console.warn("[MicroZoukei] Tauri API not yet available. Will initialize when injected.");
     }
   }
   exports.cleanupInjectedScript = cleanupInjectedScript;

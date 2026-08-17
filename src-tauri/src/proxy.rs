@@ -14,6 +14,8 @@ use tokio_tungstenite::tungstenite::protocol::Message as TungMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use std::time::SystemTime;
 use serde_json::json;
+use crate::commands::dispatch_command;
+use crate::handlers::CommandPayload;
 
 fn proxy_origin(headers: &warp::http::HeaderMap) -> String {
     if let Some(host) = headers.get(http::header::HOST) {
@@ -131,7 +133,21 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
             let status_route = warp::path!("__microzoukei_cache_status")
                 .and(cache_dir_filter.clone())
                 .and_then(handle_cache_status);
-            // HTTP route
+            // New API command route (must be before general HTTP route)
+            let api_command_route = warp::path!("api" / "command")
+                .and(warp::body::json())
+                .and_then(|payload: CommandPayload| async move {
+                    let response = dispatch_command(payload).await;
+                    Ok::<_, warp::Rejection>(warp::reply::json(&response))
+                });
+            // WebSocket route: accept ws upgrades and proxy to upstream wss
+            let ws_route = warp::path::full()
+                .and(warp::header::headers_cloned())
+                .and(warp::query::raw().or_else(|_| async { Ok::<(String,), warp::Rejection>((String::new(),)) }))
+                .and(warp::ws())
+                .and(cookie_store_filter.clone())
+                .and_then(handle_ws_upgrade);
+            // HTTP route (catches everything else, including /api/command if not matched above)
             let http_route = warp::any()
                 .and(warp::method())
                 .and(warp::header::headers_cloned())
@@ -141,15 +157,7 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
                 .and(cookie_store_filter.clone())
                 .and_then(handle_request);
 
-            // WebSocket route: accept ws upgrades and proxy to upstream wss
-            let ws_route = warp::path::full()
-                .and(warp::header::headers_cloned())
-                .and(warp::query::raw().or_else(|_| async { Ok::<(String,), warp::Rejection>((String::new(),)) }))
-                .and(warp::ws())
-                .and(cookie_store_filter.clone())
-                .and_then(handle_ws_upgrade);
-
-            let route = status_route.or(ws_route).or(http_route);
+            let route = status_route.or(api_command_route).or(ws_route).or(http_route);
 
             // bind to ephemeral port inside runtime
             let (addr, server) = warp::serve(route).bind_ephemeral(([127, 0, 0, 1], 0));

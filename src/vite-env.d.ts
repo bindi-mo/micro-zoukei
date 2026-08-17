@@ -8,3 +8,11 @@ declare global {
         __tauri__: any;
     }
 }
+
+// MicroZoukei-specific window extensions
+declare global {
+    interface Window {
+        microZoukei?: MicroZoukeiAPI;
+        getProxyPort(): Promise<number> | undefined;
+    }
+}
