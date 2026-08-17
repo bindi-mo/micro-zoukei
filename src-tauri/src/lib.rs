@@ -175,10 +175,10 @@ pub fn run() {
             let cache_dir = webview_cache_dir(app.handle());
             // Start proxy and block until its port is ready
             let proxy_cache_dir = cache_dir.clone();
-            let mut port: Option<u16> = None;
+            let port: u16;
             match proxy::start_proxy(proxy_cache_dir) {
                 Ok(p) => {
-                    port = Some(p);
+                    port = p;
                     println!("[tauri] Proxy started on port: {}", p);
                     let mut state = app_state.lock().unwrap();
                     state.proxy_port = Some(p);
@@ -191,7 +191,7 @@ pub fn run() {
 
 
                     // Navigation URL is now determined by the proxy port from the start, bypassing frontend readiness checks
-                    let final_url = format!("http://127.0.0.1:{}/", port.unwrap());
+                    let final_url = format!("http://127.0.0.1:{}/", port);
                     println!("[tauri] Initial navigation targeting local proxy: {}", final_url);
 
                     WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(Url::parse(&final_url).unwrap()))
@@ -211,7 +211,7 @@ pub fn run() {
             }
 
             #[cfg(debug_assertions)]
-            spawn_injected_js_watcher(app.handle().clone(), port.unwrap());
+            spawn_injected_js_watcher(app.handle().clone(), port);
 
             Ok(())
         })
