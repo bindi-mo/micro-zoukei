@@ -4,6 +4,7 @@ use std::path::PathBuf;
 #[cfg(debug_assertions)]
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(debug_assertions)]
 use notify::{recommended_watcher, Config, RecursiveMode, Watcher};
@@ -123,7 +124,18 @@ fn read_injected_script(port: u16) -> Result<String, String> {
 }
 
 #[cfg(debug_assertions)]
-fn inject_updated_script(app_handle: &tauri::AppHandle, script: String) {
+fn inject_updated_script(
+    app_handle: &tauri::AppHandle,
+    script: String,
+    last_reload_time: Arc<Mutex<u64>>,
+) {
+    // Update the timestamp of successful injection
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    *last_reload_time.lock().unwrap() = now;
+
     let eval_script = format!(
         "(function() {{ if (window.microZoukeiInjectedState?.cleanup) {{ window.microZoukeiInjectedState.cleanup(); }} const script = {}; eval(script); }})();",
         serde_json::to_string(&script).unwrap_or_else(|_| "''".to_string())
@@ -147,6 +159,8 @@ fn inject_updated_script(app_handle: &tauri::AppHandle, script: String) {
 fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
     // Clone port for use in the loop (it doesn't implement Copy)
     let port_clone = port;
+    let last_reload_time = Arc::new(Mutex::new(0u64));
+
     std::thread::spawn(move || {
         let source_path = injected_js_source_path();
         let (tx, rx) = channel();
@@ -177,8 +191,25 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
             match event {
                 Ok(event) => {
                     if event.paths.iter().any(|path| path == &source_path) {
+                        // Debounce: check if enough time has passed since last reload
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+
+                        let last_time = *last_reload_time.lock().unwrap();
+                        if now - last_time < 300 {
+                            eprintln!(
+                                "[tauri] debouncing injected.js reload ({}ms since last reload)",
+                                now - last_time
+                            );
+                            continue;
+                        }
+
                         match read_injected_script(port_clone) {
-                            Ok(script) => inject_updated_script(&app_handle, script),
+                            Ok(script) => {
+                                inject_updated_script(&app_handle, script, last_reload_time.clone())
+                            }
                             Err(err) => {
                                 eprintln!("[tauri] failed to reload injected.js: {:?}", err)
                             }
