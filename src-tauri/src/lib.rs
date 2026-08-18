@@ -60,6 +60,31 @@ async fn send_chat_prompt(
 }
 
 #[cfg(debug_assertions)]
+fn wait_for_write_complete(path: &PathBuf, timeout_ms: u64) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_millis(timeout_ms);
+    let mut last_mtime = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map_err(|e| e.to_string())?;
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let current_mtime = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .map_err(|e| e.to_string())?;
+
+        if current_mtime == last_mtime {
+            return Ok(()); // Write complete
+        }
+        last_mtime = current_mtime;
+
+        if start.elapsed() > timeout {
+            return Err("Write timeout".to_string());
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
 fn injected_js_source_path() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     std::path::PathBuf::from(manifest_dir).parent().unwrap().join("src/assets/injected.js")
@@ -70,16 +95,22 @@ fn read_injected_script(port: u16) -> Result<String, String> {
     let path = injected_js_source_path();
     eprintln!("[tauri] Attempting to read injected.js from: {:?}", path);
 
-    // Read the original script
-    let mut script_content = std::fs::read_to_string(&path).map_err(|e| format!("failed to read {:?}: {}", path, e))?;
+    match wait_for_write_complete(&path, 5000) {
+        Ok(_) => {
+            let script_content = std::fs::read_to_string(&path)
+                .map_err(|e| format!("failed to read {:?}: {}", path, e))?;
 
-    // Inject proxy_port constant at the top of the script
-    script_content.insert_str(0, &format!(
-        "// Proxy port number embedded at boot time (injected by Tauri)\nconst PROXY_PORT = {};\n",
-        port
-    ));
+            // Inject proxy_port constant at the replace of the script
+            let script = script_content.replacen(
+                "const PROXY_PORT = 8080",
+                &format!("const PROXY_PORT = {}", port),
+                1,
+            );
 
-    Ok(script_content)
+            Ok(script)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -130,28 +161,19 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
             return;
         }
 
-        let debounce = std::time::Duration::from_millis(500);
-        let mut last_reload = std::time::Instant::now() - debounce;
-
         for event in rx {
-            let now = std::time::Instant::now();
-            if now.duration_since(last_reload) < debounce {
-                continue;
-            }
-
             match event {
                 Ok(event) => {
                     if event.paths.iter().any(|path| path == &source_path) {
-                        last_reload = now;
-                        // A brief buffer to wait for the file writing to complete (avoiding race conditions)
-                        std::thread::sleep(std::time::Duration::from_millis(100));
                         match read_injected_script(port_clone) {
                             Ok(script) => inject_updated_script(&app_handle, script),
-                            Result::Err(err) => eprintln!("[tauri] failed to reload injected.js: {:?}", err),
+                            Err(err) => {
+                                eprintln!("[tauri] failed to reload injected.js: {:?}", err)
+                            }
                         };
                     }
                 }
-                Result::Err(err) => eprintln!("[tauri] injected.js watcher error: {:?}", err)
+                Err(err) => eprintln!("[tauri] injected.js watcher error: {:?}", err),
             }
         }
     });
