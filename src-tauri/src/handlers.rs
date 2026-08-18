@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use tokio::fs;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::path::PathBuf;
+use tokio::fs;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommandPayload {
@@ -72,18 +72,24 @@ pub async fn handle_list_files(path: String) -> Result<serde_json::Value, String
 
 pub async fn handle_read_file(path: String) -> Result<String, String> {
     let full_path = resolve_path(&path)?;
-    fs::read_to_string(full_path).await.map_err(|e| e.to_string())
+    fs::read_to_string(full_path)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 pub async fn handle_write_file(path: String, content: String) -> Result<bool, String> {
     let full_path = resolve_path(&path)?;
-    fs::write(full_path, content).await.map_err(|e| e.to_string())?;
+    fs::write(full_path, content)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(true)
 }
 
 pub async fn handle_delete_file(path: String) -> Result<bool, String> {
     let full_path = resolve_path(&path)?;
-    fs::remove_file(full_path).await.map_err(|e| e.to_string())?;
+    fs::remove_file(full_path)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(true)
 }
 
@@ -100,7 +106,9 @@ pub async fn handle_sync_project(project_id: String) -> Result<serde_json::Value
     };
 
     if !std::path::Path::new(project_path).exists() {
-        fs::create_dir_all(project_path).await.map_err(|e| e.to_string())?;
+        fs::create_dir_all(project_path)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     let list_res = handle_list_files(project_path.to_string()).await?;

@@ -1,20 +1,20 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use std::env;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 #[cfg(debug_assertions)]
 use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
 
-use tauri::{Url, WebviewWindowBuilder};
-use tauri::window::Color;
-use tauri::Manager;
 #[cfg(debug_assertions)]
 use notify::{recommended_watcher, Config, RecursiveMode, Watcher};
+use tauri::window::Color;
+use tauri::Manager;
+use tauri::{Url, WebviewWindowBuilder};
 
-pub mod network;
-pub mod proxy;
 pub mod commands;
 pub mod handlers;
+pub mod network;
+pub mod proxy;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -32,7 +32,9 @@ async fn send_chat_prompt(
     println!("[CHAT RECEIVED] {}", message);
 
     let client = network::NetworkClient::new();
-    let port = app_state.lock().map_err(|e| e.to_string())?
+    let port = app_state
+        .lock()
+        .map_err(|e| e.to_string())?
         .proxy_port
         .map(|p| p.to_string())
         .unwrap_or_else(|| "8080".to_string());
@@ -40,10 +42,14 @@ async fn send_chat_prompt(
     let url = format!("http://127.0.0.1:{}/v1/chat", port);
     let body = serde_json::json!({ "message": message });
 
-    match client.send_request(reqwest::Method::POST, &url, Some(body)).await {
+    match client
+        .send_request(reqwest::Method::POST, &url, Some(body))
+        .await
+    {
         Ok(response) => {
             let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-            let reply: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+            let reply: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
 
             let script = format!(
                 "if (window.microZoukeiReceiveResponse) {{ window.microZoukeiReceiveResponse({}); }}",
@@ -87,7 +93,10 @@ fn wait_for_write_complete(path: &PathBuf, timeout_ms: u64) -> Result<(), String
 #[cfg(debug_assertions)]
 fn injected_js_source_path() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    std::path::PathBuf::from(manifest_dir).parent().unwrap().join("src/assets/injected.js")
+    std::path::PathBuf::from(manifest_dir)
+        .parent()
+        .unwrap()
+        .join("src/assets/injected.js")
 }
 
 #[cfg(debug_assertions)]
@@ -157,7 +166,10 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
         }
 
         if let Err(err) = watcher.watch(&source_path, RecursiveMode::NonRecursive) {
-            eprintln!("[tauri] injected.js watcher failed to watch path: {:?}", err);
+            eprintln!(
+                "[tauri] injected.js watcher failed to watch path: {:?}",
+                err
+            );
             return;
         }
 
@@ -180,7 +192,9 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
 }
 
 fn webview_cache_dir(app_handle: &tauri::AppHandle) -> PathBuf {
-    app_handle.path().app_cache_dir()
+    app_handle
+        .path()
+        .app_cache_dir()
         .expect("[tauri] Failed to resolve cache directory, using default.")
         .join(format!("{}/webview_cache", APP_NAME))
 }
@@ -211,20 +225,26 @@ pub fn run() {
                         String::new()
                     });
 
-
                     // Navigation URL is now determined by the proxy port from the start, bypassing frontend readiness checks
                     let final_url = format!("http://127.0.0.1:{}/", port);
-                    println!("[tauri] Initial navigation targeting local proxy: {}", final_url);
+                    println!(
+                        "[tauri] Initial navigation targeting local proxy: {}",
+                        final_url
+                    );
 
-                    WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(Url::parse(&final_url).unwrap()))
-                        .title("microZoukei")
-                        .inner_size(1280.0, 800.0)
-                        .data_directory(cache_dir.clone())
-                        .resizable(true)
-                        .decorations(true)
-                        .background_color(Color(15, 23, 42, 255))
-                        .initialization_script(init_script)
-                        .build()?;
+                    WebviewWindowBuilder::new(
+                        app,
+                        "main",
+                        tauri::WebviewUrl::External(Url::parse(&final_url).unwrap()),
+                    )
+                    .title("microZoukei")
+                    .inner_size(1280.0, 800.0)
+                    .data_directory(cache_dir.clone())
+                    .resizable(true)
+                    .decorations(true)
+                    .background_color(Color(15, 23, 42, 255))
+                    .initialization_script(init_script)
+                    .build()?;
                 }
                 Err(e) => {
                     eprintln!("[tauri] Failed to start proxy: {}", e);

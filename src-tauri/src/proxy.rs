@@ -1,21 +1,21 @@
-use std::path::PathBuf;
-use std::sync::{Arc, mpsc, Mutex};
-use std::{fs, time::Duration};
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{mpsc, Arc, Mutex};
+use std::{fs, time::Duration};
 
-use blake3;
-use mime_guess::MimeGuess;
-use warp::{http::Response as WarpResponse, hyper::StatusCode, Filter};
-use chrono::Utc;
-use warp::ws::Ws;
-use futures_util::{StreamExt, SinkExt};
-use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::protocol::Message as TungMessage;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use std::time::SystemTime;
-use serde_json::json;
 use crate::commands::dispatch_command;
 use crate::handlers::CommandPayload;
+use blake3;
+use chrono::Utc;
+use futures_util::{SinkExt, StreamExt};
+use mime_guess::MimeGuess;
+use serde_json::json;
+use std::time::SystemTime;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::Message as TungMessage;
+use warp::ws::Ws;
+use warp::{http::Response as WarpResponse, hyper::StatusCode, Filter};
 
 fn proxy_origin(headers: &warp::http::HeaderMap) -> String {
     if let Some(host) = headers.get(http::header::HOST) {
@@ -116,7 +116,10 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
     let cs = cookie_store.clone();
     std::thread::spawn(move || {
         // build a runtime for the server in this thread
-        let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        let rt = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("[proxy] failed to build runtime: {}", e);
@@ -143,7 +146,10 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
             // WebSocket route: accept ws upgrades and proxy to upstream wss
             let ws_route = warp::path::full()
                 .and(warp::header::headers_cloned())
-                .and(warp::query::raw().or_else(|_| async { Ok::<(String,), warp::Rejection>((String::new(),)) }))
+                .and(
+                    warp::query::raw()
+                        .or_else(|_| async { Ok::<(String,), warp::Rejection>((String::new(),)) }),
+                )
                 .and(warp::ws())
                 .and(cookie_store_filter.clone())
                 .and_then(handle_ws_upgrade);
@@ -152,12 +158,18 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
                 .and(warp::method())
                 .and(warp::header::headers_cloned())
                 .and(warp::path::full())
-                .and(warp::query::raw().or_else(|_| async { Ok::<(String,), warp::Rejection>((String::new(),)) }))
+                .and(
+                    warp::query::raw()
+                        .or_else(|_| async { Ok::<(String,), warp::Rejection>((String::new(),)) }),
+                )
                 .and(cache_dir_filter.clone())
                 .and(cookie_store_filter.clone())
                 .and_then(handle_request);
 
-            let route = status_route.or(api_command_route).or(ws_route).or(http_route);
+            let route = status_route
+                .or(api_command_route)
+                .or(ws_route)
+                .or(http_route);
 
             // bind to ephemeral port inside runtime
             let (addr, server) = warp::serve(route).bind_ephemeral(([127, 0, 0, 1], 0));
@@ -199,7 +211,9 @@ fn prune_cache(cache_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error + Se
     // sort by mtime ascending (oldest first)
     entries.sort_by_key(|e| e.2);
     for (p, sz, _t) in entries {
-        if total <= MAX_CACHE_BYTES { break; }
+        if total <= MAX_CACHE_BYTES {
+            break;
+        }
         // remove body and meta
         let meta = p.with_extension("meta.json");
         let _ = fs::remove_file(&p);
@@ -221,8 +235,13 @@ async fn handle_cache_status(cache_dir: Arc<PathBuf>) -> Result<impl warp::Reply
                     if let Ok(md) = fs::metadata(&p) {
                         let sz = md.len();
                         total += sz;
-                        let key = p.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
-                        items.push(json!({"key": key, "path": p.display().to_string(), "size": sz}));
+                        let key = p
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        items
+                            .push(json!({"key": key, "path": p.display().to_string(), "size": sz}));
                     }
                 }
             }
@@ -240,13 +259,12 @@ async fn handle_request(
     cache_dir: Arc<PathBuf>,
     cookie_store: Arc<Mutex<HashMap<String, String>>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-
     // Build upstream URL
     let path = full_path.as_str();
 
-        // Serve embedded ServiceWorker script for same-origin registration
-        if path == "/__microzoukei_sw.js" && method == warp::http::Method::GET {
-                let sw = r#"
+    // Serve embedded ServiceWorker script for same-origin registration
+    if path == "/__microzoukei_sw.js" && method == warp::http::Method::GET {
+        let sw = r#"
 const CACHE_NAME = 'microzoukei-sw-v1';
 self.addEventListener('install', (e) => { self.skipWaiting(); });
 self.addEventListener('activate', (e) => { e.waitUntil(self.clients.claim()); });
@@ -258,12 +276,12 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));
 });
 "#;
-                let response = WarpResponse::builder()
-                        .status(StatusCode::OK)
-                        .header("content-type", "application/javascript")
-                        .body(sw.as_bytes().to_vec());
-                return Ok(response);
-        }
+        let response = WarpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/javascript")
+            .body(sw.as_bytes().to_vec());
+        return Ok(response);
+    }
     // Serve local assets first (cache or pre-placed files)
     let mut local_path = cache_dir.join(path);
     if local_path.to_string_lossy().starts_with('/') {
@@ -276,7 +294,8 @@ self.addEventListener('fetch', (e) => {
                 .first_raw()
                 .unwrap_or("application/octet-stream");
 
-            let builder = WarpResponse::builder().status(StatusCode::OK)
+            let builder = WarpResponse::builder()
+                .status(StatusCode::OK)
                 .header("content-type", content_type);
 
             // Add some headers to prevent issues with local files
@@ -308,7 +327,8 @@ self.addEventListener('fetch', (e) => {
                         .and_then(|c| c.as_str())
                         .unwrap_or("application/octet-stream");
 
-                    let mut builder = WarpResponse::builder().status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
+                    let mut builder = WarpResponse::builder()
+                        .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
                     builder = builder.header("content-type", content_type);
                     // return cached body
                     let response = builder.body(bytes);
@@ -324,7 +344,8 @@ self.addEventListener('fetch', (e) => {
     // forward selected headers (user-agent) and include cookies from server-side store
     let client = reqwest::Client::new();
     // convert warp/http Method to reqwest::Method
-    let req_method = reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
+    let req_method =
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
     let mut req = client.request(req_method, &upstream);
     if let Some(val) = headers.get("user-agent") {
         if let Ok(s) = val.to_str() {
@@ -390,7 +411,11 @@ self.addEventListener('fetch', (e) => {
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
-        .or_else(|| MimeGuess::from_path(path).first_raw().map(|s| s.to_string()))
+        .or_else(|| {
+            MimeGuess::from_path(path)
+                .first_raw()
+                .map(|s| s.to_string())
+        })
         .unwrap_or_else(|| "application/octet-stream".to_string());
 
     let host_origin = proxy_origin(&headers);
@@ -416,7 +441,6 @@ self.addEventListener('fetch', (e) => {
             eprintln!("[proxy] prune_cache failed: {}", e);
         }
     }
-
 
     let mut synthesized_set_cookie: Vec<String> = Vec::new();
     for (name, val) in headers_map.iter() {
@@ -444,7 +468,8 @@ self.addEventListener('fetch', (e) => {
     }
 
     // build response with upstream headers we care about
-    let mut builder = WarpResponse::builder().status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
+    let mut builder =
+        WarpResponse::builder().status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
     if let Some(ct) = headers_map.get(reqwest::header::CONTENT_TYPE) {
         if let Ok(s) = ct.to_str() {
             builder = builder.header("content-type", s);
@@ -482,112 +507,140 @@ async fn handle_ws_upgrade(
 
     let headers_cloned = headers.clone();
 
-    Ok(ws.on_upgrade(move |client_ws: warp::ws::WebSocket| async move {
-        let headers = headers_cloned;
-        println!("[proxy] ws upgrade requested: {}", upstream);
-        let cookie_header = {
-            let store = cookie_store.lock().unwrap();
-            if store.is_empty() {
-                None
-            } else {
-                Some(store.values().cloned().collect::<Vec<_>>().join("; "))
-            }
-        };
-
-        match upstream.clone().into_client_request() {
-            Ok(mut client_req) => {
-                if let Some(ch) = cookie_header {
-                    client_req.headers_mut().insert("cookie", ch.parse().unwrap());
+    Ok(
+        ws.on_upgrade(move |client_ws: warp::ws::WebSocket| async move {
+            let headers = headers_cloned;
+            println!("[proxy] ws upgrade requested: {}", upstream);
+            let cookie_header = {
+                let store = cookie_store.lock().unwrap();
+                if store.is_empty() {
+                    None
+                } else {
+                    Some(store.values().cloned().collect::<Vec<_>>().join("; "))
                 }
+            };
 
-                for (name, value) in headers {
-                    if let Some(n) = name {
-                        let name_str = n.to_string();
-                        if name_str != "host" && name_str != "content-length" {
-                            if let Ok(s) = value.to_str() {
-                                if let Ok(new_name) = reqwest::header::HeaderName::from_bytes(name_str.as_bytes()) {
-                                    client_req.headers_mut().insert(new_name, s.parse().unwrap());
+            match upstream.clone().into_client_request() {
+                Ok(mut client_req) => {
+                    if let Some(ch) = cookie_header {
+                        client_req
+                            .headers_mut()
+                            .insert("cookie", ch.parse().unwrap());
+                    }
+
+                    for (name, value) in headers {
+                        if let Some(n) = name {
+                            let name_str = n.to_string();
+                            if name_str != "host" && name_str != "content-length" {
+                                if let Ok(s) = value.to_str() {
+                                    if let Ok(new_name) =
+                                        reqwest::header::HeaderName::from_bytes(name_str.as_bytes())
+                                    {
+                                        client_req
+                                            .headers_mut()
+                                            .insert(new_name, s.parse().unwrap());
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                println!("[proxy] forwarding headers to upstream");
+                    println!("[proxy] forwarding headers to upstream");
 
-                match connect_async(client_req).await {
-                    Ok((upstream_ws, resp)) => {
-                        println!("[proxy] ws connected upstream: {} (status: {})", upstream, resp.status());
-                        let (mut client_sink, mut client_stream) = client_ws.split();
-                        let (mut upstream_sink, mut upstream_stream) = upstream_ws.split();
+                    match connect_async(client_req).await {
+                        Ok((upstream_ws, resp)) => {
+                            println!(
+                                "[proxy] ws connected upstream: {} (status: {})",
+                                upstream,
+                                resp.status()
+                            );
+                            let (mut client_sink, mut client_stream) = client_ws.split();
+                            let (mut upstream_sink, mut upstream_stream) = upstream_ws.split();
 
-                        let c_to_u = async {
-                            while let Some(Ok(msg)) = client_stream.next().await {
-                                let tmsg = if msg.is_text() {
-                                    TungMessage::Text(msg.to_str().unwrap_or_default().to_string())
-                                } else if msg.is_binary() {
-                                    TungMessage::Binary(msg.as_bytes().to_vec())
-                                } else if msg.is_close() {
-                                    TungMessage::Close(None)
-                                } else if msg.is_ping() {
-                                    TungMessage::Ping(msg.as_bytes().to_vec())
-                                } else if msg.is_pong() {
-                                    TungMessage::Pong(msg.as_bytes().to_vec())
-                                } else {
-                                    TungMessage::Binary(msg.as_bytes().to_vec())
-                                };
-                                if upstream_sink.send(tmsg).await.is_err() {
-                                    break;
+                            let c_to_u = async {
+                                while let Some(Ok(msg)) = client_stream.next().await {
+                                    let tmsg = if msg.is_text() {
+                                        TungMessage::Text(
+                                            msg.to_str().unwrap_or_default().to_string(),
+                                        )
+                                    } else if msg.is_binary() {
+                                        TungMessage::Binary(msg.as_bytes().to_vec())
+                                    } else if msg.is_close() {
+                                        TungMessage::Close(None)
+                                    } else if msg.is_ping() {
+                                        TungMessage::Ping(msg.as_bytes().to_vec())
+                                    } else if msg.is_pong() {
+                                        TungMessage::Pong(msg.as_bytes().to_vec())
+                                    } else {
+                                        TungMessage::Binary(msg.as_bytes().to_vec())
+                                    };
+                                    if upstream_sink.send(tmsg).await.is_err() {
+                                        break;
+                                    }
                                 }
-                            }
-                            let _ = upstream_sink.close().await;
-                        };
+                                let _ = upstream_sink.close().await;
+                            };
 
-                        let u_to_c = async {
-                            while let Some(msg) = upstream_stream.next().await {
-                                match msg {
-                                    Ok(m) => {
-                                        match m {
+                            let u_to_c = async {
+                                while let Some(msg) = upstream_stream.next().await {
+                                    match msg {
+                                        Ok(m) => match m {
                                             TungMessage::Text(s) => {
-                                                if client_sink.send(warp::ws::Message::text(s)).await.is_err() { break; }
+                                                if client_sink
+                                                    .send(warp::ws::Message::text(s))
+                                                    .await
+                                                    .is_err()
+                                                {
+                                                    break;
+                                                }
                                             }
                                             TungMessage::Binary(b) => {
-                                                if client_sink.send(warp::ws::Message::binary(b)).await.is_err() { break; }
+                                                if client_sink
+                                                    .send(warp::ws::Message::binary(b))
+                                                    .await
+                                                    .is_err()
+                                                {
+                                                    break;
+                                                }
                                             }
                                             TungMessage::Ping(p) => {
-                                                let _ = client_sink.send(warp::ws::Message::ping(p)).await;
+                                                let _ = client_sink
+                                                    .send(warp::ws::Message::ping(p))
+                                                    .await;
                                             }
                                             TungMessage::Pong(p) => {
-                                                let _ = client_sink.send(warp::ws::Message::pong(p)).await;
+                                                let _ = client_sink
+                                                    .send(warp::ws::Message::pong(p))
+                                                    .await;
                                             }
                                             TungMessage::Close(_) => {
-                                                let _ = client_sink.send(warp::ws::Message::close()).await;
+                                                let _ = client_sink
+                                                    .send(warp::ws::Message::close())
+                                                    .await;
                                                 break;
                                             }
                                             TungMessage::Frame(_) => {}
-                                        }
+                                        },
+                                        Err(_) => break,
                                     }
-                                    Err(_) => break,
                                 }
-                            }
-                            let _ = client_sink.close().await;
-                        };
+                                let _ = client_sink.close().await;
+                            };
 
-                        tokio::select! {
-                            _ = c_to_u => (),
-                            _ = u_to_c => (),
+                            tokio::select! {
+                                _ = c_to_u => (),
+                                _ = u_to_c => (),
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[proxy] ws connect failed: {}", e);
                         }
                     }
-                    Err(e) => {
-                        eprintln!("[proxy] ws connect failed: {}", e);
-                    }
+                }
+                Err(e) => {
+                    eprintln!("[proxy] into_client_request failed: {}", e);
                 }
             }
-            Err(e) => {
-                eprintln!("[proxy] into_client_request failed: {}", e);
-            }
-        }
-    }))
-
-
+        }),
+    )
 }
