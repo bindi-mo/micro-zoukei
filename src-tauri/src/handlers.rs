@@ -98,6 +98,13 @@ pub async fn handle_log_message(message: String) -> Result<(), String> {
     Ok(())
 }
 
+pub async fn handle_health() -> Result<serde_json::Value, String> {
+    Ok(json!({
+        "status": "ok",
+        "ready": true
+    }))
+}
+
 pub async fn handle_sync_project(project_id: String) -> Result<serde_json::Value, String> {
     let project_path = match project_id.as_str() {
         "proj1" => "_data/project1",

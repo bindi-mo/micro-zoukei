@@ -34,6 +34,11 @@ pub async fn mzd_log_message(message: String) -> Result<(), String> {
     crate::handlers::handle_log_message(message).await
 }
 
+#[tauri::command]
+pub async fn mzd_health() -> Result<serde_json::Value, String> {
+    crate::handlers::handle_health().await
+}
+
 // Dispatcher function - handles incoming HTTP requests from the frontend
 pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -125,6 +130,10 @@ pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
                     .to_string(),
             )
             .await,
+        ),
+        "mzd_health" => map_error(
+            crate::handlers::handle_health()
+                .await,
         ),
         _ => CommandResponse::error(format!("Unknown command: {}", payload.command)),
     }

@@ -5,40 +5,12 @@
 
 // Proxy port number embedded at boot time (injected by Tauri)
 const PROXY_PORT = 8080;
+export let bridgeReady: boolean = false;
 
 import { hideAllErrors, showError } from './components/error-handler';
 import { hideLoading, isLoadingDisplayed, showLoading } from './components/loading';
-import { isBridgeReady, rpcBridge } from './components/rpc-bridge';
+import { checkBridgeHealth, rpcBridge } from './components/rpc-bridge';
 import type { MicroZoukeiAPI } from './types/injected';
-
-// Expose getProxyPort to window for RPC bridge to use
-if (typeof window !== 'undefined') {
-    ;(window as any).getProxyPort = async (): Promise<number> => {
-        return PROXY_PORT;
-    };
-}
-
-/**
- * Initialize MicroZoukei RPC bridge.
- * This function should be called when the WebView is ready.
- */
-export function initMicroZoukei(): void {
-    rpcBridge.logMessage('[MicroZoukei] Initializing...');
-
-    // Check if Tauri API is available
-    if (!isBridgeReady()) {
-        showError({
-            message: 'Tauri API not available. Please ensure the app is running.',
-            showDetails: true,
-        });
-        return;
-    }
-
-    // Expose RPC bridge to window object
-    (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei = rpcBridge;
-
-    rpcBridge.logMessage('[MicroZoukei] RPC Bridge initialized successfully.');
-}
 
 /**
  * Cleanup function called when the injected script needs to be reloaded.
@@ -75,12 +47,28 @@ export async function withLoading<T>(
 
 // Auto-initialize when script is injected via inject_updated_script()
 if (typeof window !== 'undefined') {
-    rpcBridge.logMessage('[MicroZoukei] Injected script loaded');
+    console.log('[MicroZoukei] Injected script loaded and executing');
 
-    // Tauri API が利用可能なら、すぐに初期化
-    if (isBridgeReady()) {
-        initMicroZoukei();
-    } else {
-        console.warn('[MicroZoukei] Tauri API not yet available. Will initialize when injected.');
-    }
+    // Expose getProxyPort to window for RPC bridge to use
+    (window as any).getProxyPort = async (): Promise<number> => {
+        return PROXY_PORT;
+    };
+
+    void checkBridgeHealth().then((ready: boolean) => {
+        bridgeReady = ready;
+
+        if (bridgeReady) {
+            // Expose RPC bridge to window object
+            (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei = rpcBridge;
+
+            rpcBridge.logMessage('[MicroZoukei] RPC Bridge initialized and ready');
+        } else {
+            showError({
+                message: 'Tauri API not available. Please ensure the app is running.',
+                showDetails: true,
+            });
+
+            console.warn('[MicroZoukei] Tauri API not yet available. Will initialize when injected.');
+        }
+    });
 }

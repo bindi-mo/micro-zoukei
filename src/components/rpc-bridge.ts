@@ -3,6 +3,7 @@
  * Handles all command invocations via the local proxy server
  */
 
+import { bridgeReady } from '../injected';
 import type { FileEntry, MicroZoukeiAPI, SyncFilesResponse, SyncProjectResponse } from '../types/injected';
 
 const COMMAND_MAP: Record<string, string> = {
@@ -13,6 +14,7 @@ const COMMAND_MAP: Record<string, string> = {
     syncProject: 'mzd_sync_project',
     syncFiles: 'mzd_sync_files',
     logMessage: 'mzd_log_message',
+    health: 'mzd_health',
 };
 
 // Get proxy port from Tauri API (exposed via injected.ts)
@@ -38,9 +40,6 @@ async function fetchCommand(options: { commandName: string; args?: any }): Promi
         // Use local proxy server instead of remote microstudio.dev
         const port = await getProxyPort();
         const proxyUrl = `http://127.0.0.1:${port}/api/command`;
-
-        console.log('[RPC Bridge] Sending command via local proxy:', proxyUrl);
-
         const response = await fetch(proxyUrl, {
             method: 'POST',
             headers: {
@@ -145,7 +144,7 @@ export const rpcBridge: MicroZoukeiAPI = {
     },
 
     isReady: () => {
-        return isBridgeReady();
+        return bridgeReady;
     },
 
     getProxyPort: async (): Promise<number> => {
@@ -161,11 +160,13 @@ export const rpcBridge: MicroZoukeiAPI = {
 };
 
 /**
- * Check if the bridge is initialized.
+ * Check if the bridge is healthy by testing connectivity.
  */
-export function isBridgeReady(): boolean {
-    // Since we are using fetch, the 'ready' state depends on the proxy being reachable.
-    // For now, we return true as long as the environment allows fetch.
-    return true;
+export async function checkBridgeHealth(): Promise<boolean> {
+    try {
+        await fetchCommand({ commandName: 'mzd_health' });
+        return true;
+    } catch {
+        return false;
+    }
 }
-

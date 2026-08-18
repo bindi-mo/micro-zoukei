@@ -15,7 +15,6 @@ var InjectedScript = (function(exports) {
     try {
       const port = await getProxyPort();
       const proxyUrl = `http://127.0.0.1:${port}/api/command`;
-      console.log("[RPC Bridge] Sending command via local proxy:", proxyUrl);
       const response = await fetch(proxyUrl, {
         method: "POST",
         headers: {
@@ -98,7 +97,7 @@ var InjectedScript = (function(exports) {
       });
     },
     isReady: () => {
-      return isBridgeReady();
+      return exports.bridgeReady;
     },
     getProxyPort: async () => {
       if (typeof window !== "undefined") {
@@ -110,14 +109,78 @@ var InjectedScript = (function(exports) {
       return 8080;
     }
   };
-  function isBridgeReady() {
-    return true;
+  async function checkBridgeHealth() {
+    try {
+      await fetchCommand({ commandName: "mzd_health" });
+      return true;
+    } catch {
+      return false;
+    }
   }
+  const DEFAULT_CONTAINER$1 = "body";
   const ERROR_CLASS = "micro-zoukei-error";
+  const ERROR_STYLE = `
+    .${ERROR_CLASS} {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background-color: #dc2626;
+        color: white;
+        padding: 15px 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        z-index: 999998;
+        max-width: 400px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    .${ERROR_CLASS} > button {
+        margin-top: 10px;
+        padding: 5px 10px;
+        background-color: rgba(255, 255, 255, 0.2);
+        border: none;
+        color: white;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+
+    .${ERROR_CLASS} > button:hover {
+        background-color: rgba(255, 255, 255, 0.3);
+    }
+`;
+  function showError(options) {
+    const container = options?.container || document.querySelector(DEFAULT_CONTAINER$1);
+    const existingStyle = document.getElementById("micro-zoukei-error-style");
+    if (!existingStyle) {
+      const styleSheet = document.createElement("style");
+      styleSheet.id = "micro-zoukei-error-style";
+      styleSheet.textContent = ERROR_STYLE;
+      document.head.appendChild(styleSheet);
+    }
+    const errorDiv = document.createElement("div");
+    errorDiv.className = ERROR_CLASS;
+    {
+      errorDiv.innerHTML = `
+            <strong>Error:</strong> ${escapeHtml(options.message)}
+            <button onclick="this.parentElement.remove()">Dismiss</button>
+        `;
+    }
+    if (container) {
+      container.appendChild(errorDiv);
+    }
+    (async () => {
+      await rpcBridge.logMessage(`[MicroZoukei] Error: ${options.message}`);
+    })();
+  }
   function hideAllErrors() {
     const errorElements = document.querySelectorAll(`.${ERROR_CLASS}`);
     errorElements.forEach((el) => el.remove());
     rpcBridge.logMessage("[MicroZoukei] All errors dismissed");
+  }
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
   }
   const DEFAULT_CONTAINER = "body";
   const LOADING_CLASS = "micro-zoukei-loading";
@@ -197,16 +260,7 @@ var InjectedScript = (function(exports) {
     return document.body.classList.contains(LOADING_CLASS);
   }
   const PROXY_PORT = 8080;
-  if (typeof window !== "undefined") {
-    window.getProxyPort = async () => {
-      return PROXY_PORT;
-    };
-  }
-  function initMicroZoukei() {
-    rpcBridge.logMessage("[MicroZoukei] Initializing...");
-    window.microZoukei = rpcBridge;
-    rpcBridge.logMessage("[MicroZoukei] RPC Bridge initialized successfully.");
-  }
+  exports.bridgeReady = false;
   function cleanupInjectedScript() {
     hideAllErrors();
     if (window.microZoukei) {
@@ -226,13 +280,24 @@ var InjectedScript = (function(exports) {
     }
   }
   if (typeof window !== "undefined") {
-    rpcBridge.logMessage("[MicroZoukei] Injected script loaded");
-    {
-      initMicroZoukei();
-    }
+    console.log("[MicroZoukei] Injected script loaded and executing");
+    window.getProxyPort = async () => {
+      return PROXY_PORT;
+    };
+    void checkBridgeHealth().then((ready) => {
+      exports.bridgeReady = ready;
+      if (exports.bridgeReady) {
+        window.microZoukei = rpcBridge;
+        rpcBridge.logMessage("[MicroZoukei] RPC Bridge initialized and ready");
+      } else {
+        showError({
+          message: "Tauri API not available. Please ensure the app is running."
+        });
+        console.warn("[MicroZoukei] Tauri API not yet available. Will initialize when injected.");
+      }
+    });
   }
   exports.cleanupInjectedScript = cleanupInjectedScript;
-  exports.initMicroZoukei = initMicroZoukei;
   exports.withLoading = withLoading;
   Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
   return exports;
