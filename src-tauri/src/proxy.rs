@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::{fs, time::Duration};
@@ -16,6 +17,69 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message as TungMessage;
 use warp::ws::Ws;
 use warp::{http::Response as WarpResponse, hyper::StatusCode, Filter};
+
+/*
+ A function that forces the copying of past localStorage data to
+ the new port even if the dynamic port changes
+*/
+fn migrate_local_storage(cache_dir: &Path, new_port: u16) {
+    // Path to the Local Storage folder in Tauri/WebView2
+    let storage_dir = cache_dir.join("localstorage");
+    if !storage_dir.exists() {
+        return;
+    }
+
+    // A text file that records the previous port number
+    // (it will be created if it doesn't exist)
+    let last_port_file = cache_dir.join("last_port.txt");
+
+    // 1. Read the port number from the previous session
+    if let Ok(last_port_str) = fs::read_to_string(&last_port_file) {
+        let last_port = last_port_str.trim();
+        let new_port_str = new_port.to_string();
+
+        // Perform the copy operation only if the port number has changed.
+        if last_port != new_port_str {
+            println!(
+                "[proxy] Detect port changes: {} -> {}",
+                last_port, new_port_str
+            );
+
+            // List of 3 file extensions to copy
+            let extensions = vec![
+                ".localstorage".to_string(),
+                ".localstorage-shm".to_string(),
+                ".localstorage-wal".to_string(),
+            ];
+
+            for ext in extensions {
+                let old_filename = format!("http_127.0.0.1_{}{}", last_port, ext);
+                let old_file_path = storage_dir.join(&old_filename);
+                if old_file_path.exists() {
+                    let new_filename = format!("http_127.0.0.1_{}{}", new_port_str, ext);
+                    let new_file_path = storage_dir.join(new_filename);
+
+                    // Copy (duplicate) the entire set of historical data as a new port name
+                    if let Err(e) = fs::copy(&old_file_path, &new_file_path) {
+                        eprintln!("[proxy] ❌ Failed to copy localStorage: {}", e);
+                    } else {
+                        println!("[proxy] 📄 The file has been copied.: {}", old_filename);
+
+                        // Once the copy is complete, delete the old files that are no longer needed.
+                        if let Err(e) = fs::remove_file(&old_file_path) {
+                            eprintln!("[proxy] ⚠️ Failed to delete old files: {}, Reason: {}", old_filename, e);
+                        } else {
+                            println!("[proxy] 🧹 I deleted some old junk files.: {}", old_filename);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Save this new port number for future comparison.
+    let _ = fs::write(&last_port_file, new_port.to_string());
+}
 
 fn proxy_origin(headers: &warp::http::HeaderMap) -> String {
     if let Some(host) = headers.get(http::header::HOST) {
@@ -183,7 +247,10 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
 
     // wait a short time for the server thread to send the port
     match rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(p) if p != 0 => Ok(p),
+        Ok(p) if p != 0 => {
+            migrate_local_storage(&cache_dir, p);
+            Ok(p)
+        },
         Ok(_) | Err(_) => Err("proxy failed to start".into()),
     }
 }
