@@ -10,20 +10,20 @@ export let bridgeReady: boolean = false;
 import { hideAllErrors, showError } from './components/error-handler';
 import { hideLoading, isLoadingDisplayed, showLoading } from './components/loading';
 import { checkBridgeHealth, rpcBridge } from './components/rpc-bridge';
+import { initializeAppExtension } from './components/uiex-initializer';
 import type { MicroZoukeiAPI } from './types/injected';
 
 /**
  * Cleanup function called when the injected script needs to be reloaded.
  */
-export function cleanupInjectedScript(): void {
+export const cleanupInjectedScript = (): void => {
     hideAllErrors();
 
     // Remove microZoukei from window if it exists
     if ((window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei) {
         delete (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei;
+        rpcBridge.logMessage('[MicroZoukei] Cleanup completed');
     }
-
-    rpcBridge.logMessage('[MicroZoukei] Cleanup completed');
 }
 
 /**
@@ -45,9 +45,33 @@ export async function withLoading<T>(
     }
 }
 
+/**
+ * A function that safely waits for the microStudio
+ * main application (window.app) to launch and performs
+ * initialization the moment it starts up
+ */
+const waitForMicroStudioLoad = (): void => {
+    const isLoaded = (window as any).app && (window as any).app.appui;
+
+    if (isLoaded) {
+        console.log('🎯 I have confirmed that microStudio has started. I will now begin extending the UI.');
+
+        setTimeout(() => {
+            initializeAppExtension();
+        }, 100);
+
+        return;
+    }
+
+    // If it hasn't started yet, check again during the browser's next
+    // rendering frame (using a safe timer that prevents an infinite loop).
+    requestAnimationFrame(waitForMicroStudioLoad);
+};
+
 // Auto-initialize when script is injected via inject_updated_script()
 if (typeof window !== 'undefined') {
     console.log('[MicroZoukei] Injected script loaded and executing');
+    cleanupInjectedScript();
 
     // Expose getProxyPort to window for RPC bridge to use
     (window as any).getProxyPort = async (): Promise<number> => {
@@ -62,6 +86,12 @@ if (typeof window !== 'undefined') {
             (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei = rpcBridge;
 
             rpcBridge.logMessage('[MicroZoukei] RPC Bridge initialized and ready');
+
+            // ----------------------------------------------------
+            // Initalize UI extention
+            // ----------------------------------------------------
+            waitForMicroStudioLoad();
+
         } else {
             showError({
                 message: 'Tauri API not available. Please ensure the app is running.',

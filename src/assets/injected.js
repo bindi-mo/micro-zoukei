@@ -259,15 +259,355 @@ var InjectedScript = (function(exports) {
   function isLoadingDisplayed() {
     return document.body.classList.contains(LOADING_CLASS);
   }
+  const createChatMarkup = () => {
+    return `
+    <div class="agent-chat-container" style="display: flex; flex-direction: column; height: 100%; color: #fff; font-family: sans-serif;">
+      <!-- header -->
+      <div style="padding: 15px; border-bottom: 1px solid #333; background: #252526;">
+        <h3 style="margin: 0; font-size: 16px;">🤖 AI Coding Agent</h3>
+      </div>
+
+      <!-- Message display area -->
+      <div id="chat-message-log" style="flex: 1; padding: 20px; overflow-y: auto; background: #1e1e1e; display: flex; flex-direction: column; gap: 12px;">
+        <p id="chat-placeholder" style="color: #888; text-align: center; margin-top: 20px;">Please submit your questions to the AI ​​coding agent here.</p>
+      </div>
+
+      <!-- Input footer -->
+      <div style="padding: 15px; background: #252526; border-top: 1px solid #333; display: flex; gap: 10px;">
+        <input type="text" id="chat-user-input" placeholder="Consult with an agent about the code...."
+          style="flex: 1; padding: 10px; background: #3c3c3c; border: 1px solid #555; color: #fff; border-radius: 4px; outline: none;">
+        <button id="chat-send-button"
+          style="padding: 10px 20px; background: #007acc; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
+          Send
+        </button>
+      </div>
+    </div>
+  `.trim();
+  };
+  const appendMessageToLog = (message) => {
+    const logContainer = document.getElementById("chat-message-log");
+    if (!logContainer) return;
+    const placeholder = document.getElementById("chat-placeholder");
+    if (placeholder) {
+      placeholder.remove();
+    }
+    const msgElement = document.createElement("div");
+    if (message.sender === "user") {
+      msgElement.style.alignSelf = "flex-end";
+      msgElement.style.backgroundColor = "#007acc";
+      msgElement.style.borderRadius = "8px 8px 0 8px";
+    } else {
+      msgElement.style.alignSelf = "flex-start";
+      msgElement.style.backgroundColor = "#333333";
+      msgElement.style.borderRadius = "8px 8px 8px 0";
+    }
+    msgElement.style.maxWidth = "70%";
+    msgElement.style.padding = "10px 14px";
+    msgElement.style.lineHeight = "1.4";
+    msgElement.style.wordBreak = "break-word";
+    msgElement.textContent = message.text;
+    logContainer.appendChild(msgElement);
+    logContainer.scrollTop = logContainer.scrollHeight;
+  };
+  const handleSendMessage = () => {
+    const inputEl = document.getElementById("chat-user-input");
+    if (!inputEl || inputEl.value.trim() === "") return;
+    const userText = inputEl.value;
+    appendMessageToLog({
+      sender: "user",
+      text: userText
+    });
+    inputEl.value = "";
+    setTimeout(() => {
+      appendMessageToLog({
+        sender: "agent",
+        text: `Regarding "${userText}", I am currently analyzing the codebase...`
+      });
+    }, 800);
+  };
+  const setupAgentChatWindow = () => {
+    const codeSection = document.getElementById("code-section");
+    if (!codeSection) {
+      console.error("The chat screen could not be initialized because #code-section could not be found.");
+      return;
+    }
+    if (document.getElementById("agent-chat-window")) return;
+    const chatWindow = document.createElement("div");
+    chatWindow.id = "agent-chat-window";
+    chatWindow.style.display = "none";
+    chatWindow.style.width = "100%";
+    chatWindow.style.height = "100%";
+    chatWindow.style.backgroundColor = "#1e1e1e";
+    chatWindow.innerHTML = createChatMarkup();
+    codeSection.appendChild(chatWindow);
+    const sendBtn = chatWindow.querySelector("#chat-send-button");
+    sendBtn?.addEventListener("click", handleSendMessage);
+    const inputEl = chatWindow.querySelector("#chat-user-input");
+    inputEl?.addEventListener("keydown", (e) => {
+      const keyEvent = e;
+      if (keyEvent.key === "Enter" && !keyEvent.isComposing) {
+        e.preventDefault();
+        handleSendMessage();
+      }
+    });
+    console.log("The UI for the Agent chat window is now ready.");
+  };
+  let flag_morespace = false;
+  let elm = null;
+  let morespace_icon = document.createElement("i");
+  let cachedCodeEditor = null;
+  const visible_header = (visible) => {
+    const header = document.getElementsByTagName("header")[0];
+    const container = document.getElementsByClassName("main-container")[0];
+    if (header && container) {
+      if (visible) {
+        header.style.top = "0";
+      } else {
+        header.style.top = "-60px";
+      }
+      if (container instanceof HTMLElement) {
+        if (visible) {
+          container.style.top = "60px";
+        } else {
+          container.style.top = "0";
+        }
+      }
+    }
+  };
+  const visible_sidemenu = (visible) => {
+    const sidemenu = document.getElementsByClassName("sidemenu")[0];
+    if (sidemenu) {
+      if (sidemenu instanceof HTMLElement) {
+        if (visible) {
+          sidemenu.style.left = "0";
+        } else {
+          sidemenu.style.left = "-60px";
+        }
+      }
+    }
+    const container = document.getElementsByClassName("section-container")[0];
+    if (container) {
+      if (container instanceof HTMLElement) {
+        if (visible) {
+          container.style.left = "60px";
+          container.style.borderLeft = "solid 10px hsl(200,30%,30%)";
+          container.style.borderRadius = "10px 0 0 0";
+        } else {
+          container.style.left = "1px";
+          container.style.borderLeft = "solid 1px hsl(200,30%,30%)";
+          container.style.borderRadius = "0";
+        }
+      }
+    }
+  };
+  const visible_runbar = (visible) => {
+    elm = document.getElementById("runbar");
+    if (elm) {
+      const firstRunbar = elm.children[0];
+      if (firstRunbar instanceof HTMLElement) {
+        if (visible) {
+          firstRunbar.style.display = "inline-block";
+        } else {
+          firstRunbar.style.display = "none";
+        }
+      }
+      const secondRunbar = elm.children[1];
+      if (secondRunbar instanceof HTMLElement) {
+        if (visible) {
+          secondRunbar.style.marginLeft = "20px";
+        } else {
+          secondRunbar.style.marginLeft = "0";
+        }
+      }
+    }
+  };
+  const visible_terminal_toolbar = (visible) => {
+    elm = document.getElementById("terminal-toolbar");
+    if (elm) {
+      const firstChild = elm.children[0];
+      if (firstChild instanceof HTMLElement) {
+        if (visible) {
+          firstChild.style.display = "inline-block";
+        } else {
+          firstChild.style.display = "none";
+        }
+      }
+      const secondChild = elm.children[1];
+      if (secondChild instanceof HTMLElement) {
+        if (visible) {
+          secondChild.style.marginLeft = "20px";
+        } else {
+          secondChild.style.marginLeft = "0";
+        }
+      }
+    }
+  };
+  const hide_morespace = () => {
+    visible_header(false);
+    visible_sidemenu(false);
+    visible_runbar(false);
+    visible_terminal_toolbar(false);
+  };
+  const expose_morespace = () => {
+    visible_header(true);
+    visible_sidemenu(true);
+    visible_runbar(true);
+    visible_terminal_toolbar(true);
+  };
+  const toggle_morespace = () => {
+    if (flag_morespace) {
+      expose_morespace();
+      morespace_icon.setAttribute("class", "fas fa-expand-arrows-alt");
+    } else {
+      hide_morespace();
+      morespace_icon.setAttribute("class", "fas fa-compress-arrows-alt");
+    }
+    flag_morespace = !flag_morespace;
+  };
+  const injectAgentMenuItem = (appui) => {
+    const ulElement = document.querySelector("#sidemenu ul");
+    if (ulElement && document.getElementById("menuitem-agent") === null) {
+      const htmlString = `
+          <li id="menuitem-agent">
+            <i class="fas fa-robot"></i><br> Agent</li>
+        `.trim();
+      ulElement.insertAdjacentHTML("afterbegin", htmlString);
+      const agentMenu = document.getElementById("menuitem-agent");
+      agentMenu?.addEventListener("click", (event) => {
+        const targetAppUi = appui;
+        if (targetAppUi && typeof targetAppUi.setSection === "function") {
+          targetAppUi.setSection("agent", true);
+        }
+      });
+    } else if (!ulElement) {
+      console.error("The specified `ul` element was not found.");
+    }
+  };
+  const removeElements = () => {
+    const discordLink = document.querySelector(
+      'a[href="https://discord.com/invite/BDMqjxd"][target="_blank"]'
+    );
+    if (discordLink) {
+      discordLink.remove();
+    }
+    const communityLink = document.querySelector(
+      'a[href="/community/"][target="_blank"]'
+    );
+    if (communityLink) {
+      communityLink.remove();
+    }
+    const oldButton = document.getElementById("project-fullscreen");
+    if (oldButton) {
+      oldButton.remove();
+    }
+  };
+  const overrideSetSection = (appui) => {
+    if (!appui || typeof appui.setSection !== "function") {
+      console.error("Not found appui.setSection function");
+      return;
+    }
+    const originalSetSection = appui.setSection;
+    appui.setSection = function(section, useraction) {
+      console.log(`Called Section: ${section}`);
+      let targetSection = section;
+      if (section === "agent") {
+        targetSection = "code";
+      }
+      const result = originalSetSection.apply(this, [targetSection, useraction]);
+      const codeSection = document.getElementById("code-section");
+      const codeEditor = document.getElementById("code-editor");
+      const chatWindow = document.getElementById("agent-chat-window");
+      const agentMenu = document.getElementById("menuitem-agent");
+      const codeMenu = document.getElementById("menuitem-code");
+      if (section === "agent") {
+        if (chatWindow) chatWindow.style.display = "block";
+        if (codeEditor && codeSection) {
+          cachedCodeEditor = codeEditor;
+          codeEditor.remove();
+          console.log("Moved the editor off the screen.");
+        }
+        codeMenu?.classList.remove("selected");
+        agentMenu?.classList.add("selected");
+        if (useraction && this.app?.project) {
+          this.app.app_state.pushState(
+            `project.${this.app.project.slug}.agent`,
+            `/projects/${this.app.project.slug}/agent/`
+          );
+        }
+      } else {
+        if (chatWindow) chatWindow.style.display = "none";
+        agentMenu?.classList.remove("selected");
+        if (cachedCodeEditor && codeSection) {
+          codeSection.insertBefore(cachedCodeEditor, chatWindow);
+          cachedCodeEditor = null;
+          console.log("The editor has been restored to the screen.");
+        }
+        return result;
+      }
+      console.log("Successfully hijacked and extended setSection.");
+    };
+  };
+  const injectRequiredStyles = () => {
+    const style = document.createElement("style");
+    style.textContent = `
+    .projectheader #project-morespace {
+      margin: 0 10px 0 0 ;
+      color: rgba(255,255,255,.5);
+      border-radius: 3px ;
+      padding: 4px;
+    }
+    .projectheader #project-morespace:hover {
+      background: rgba(0,0,0,.25) ;
+      color: rgba(255,255,255,.75);
+    }
+    .sidemenu li .fa-robot {
+        color: hsla(190, 40%, 90%, 0.85);
+    }
+        `;
+    document.head.appendChild(style);
+  };
+  const initializeAppExtension = () => {
+    removeElements();
+    elm = document.getElementById("project-morespace");
+    if (!elm) {
+      morespace_icon.setAttribute("class", "fas fa-expand-arrows-alt");
+      morespace_icon.setAttribute("id", "project-morespace");
+      morespace_icon.setAttribute("title", "Toggle More Space");
+      morespace_icon.onclick = () => {
+        toggle_morespace();
+      };
+      elm = document.getElementById("project-icon");
+      if (elm && elm instanceof HTMLElement) {
+        elm.after(morespace_icon);
+      }
+    }
+    elm = document.getElementsByTagName("header")[0];
+    const style = window.getComputedStyle(elm);
+    let prop = style.getPropertyValue("transition-property");
+    elm.style.transitionProperty = prop + ", top";
+    prop = style.getPropertyValue("transition-duration");
+    elm.style.transitionDuration = prop + ", 0.5s";
+    elm.ontransitionend = () => {
+      window.dispatchEvent(new Event("resize"));
+    };
+    elm.ontransitionstart = () => {
+      window.dispatchEvent(new Event("resize"));
+    };
+    injectRequiredStyles();
+    const targetAppUi = window.app?.appui;
+    injectAgentMenuItem(targetAppUi);
+    overrideSetSection(targetAppUi);
+    setupAgentChatWindow();
+  };
   const PROXY_PORT = 8080;
   exports.bridgeReady = false;
-  function cleanupInjectedScript() {
+  const cleanupInjectedScript = () => {
     hideAllErrors();
     if (window.microZoukei) {
       delete window.microZoukei;
+      rpcBridge.logMessage("[MicroZoukei] Cleanup completed");
     }
-    rpcBridge.logMessage("[MicroZoukei] Cleanup completed");
-  }
+  };
   async function withLoading(operation, message) {
     if (!isLoadingDisplayed()) {
       showLoading({ message });
@@ -279,8 +619,20 @@ var InjectedScript = (function(exports) {
       hideLoading();
     }
   }
+  const waitForMicroStudioLoad = () => {
+    const isLoaded = window.app && window.app.appui;
+    if (isLoaded) {
+      console.log("🎯 I have confirmed that microStudio has started. I will now begin extending the UI.");
+      setTimeout(() => {
+        initializeAppExtension();
+      }, 100);
+      return;
+    }
+    requestAnimationFrame(waitForMicroStudioLoad);
+  };
   if (typeof window !== "undefined") {
     console.log("[MicroZoukei] Injected script loaded and executing");
+    cleanupInjectedScript();
     window.getProxyPort = async () => {
       return PROXY_PORT;
     };
@@ -289,6 +641,7 @@ var InjectedScript = (function(exports) {
       if (exports.bridgeReady) {
         window.microZoukei = rpcBridge;
         rpcBridge.logMessage("[MicroZoukei] RPC Bridge initialized and ready");
+        waitForMicroStudioLoad();
       } else {
         showError({
           message: "Tauri API not available. Please ensure the app is running."
