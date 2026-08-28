@@ -17,18 +17,6 @@ const COMMAND_MAP: Record<string, string> = {
     health: 'mzd_health',
 };
 
-// Get proxy port from Tauri API (exposed via injected.ts)
-async function getProxyPort(): Promise<number> {
-    if (typeof window !== 'undefined') {
-        const win = window as unknown as { microZoukei?: MicroZoukeiAPI; getProxyPort: () => Promise<number> };
-        if (win.getProxyPort) {
-            return await win.getProxyPort();
-        }
-    }
-    // Fallback for testing without Tauri
-    return 8080;
-}
-
 /**
  * Internal function to dispatch commands via the proxy server.
  */
@@ -38,7 +26,12 @@ async function fetchCommand(options: { commandName: string; args?: any }): Promi
 
     try {
         // Use local proxy server instead of remote microstudio.dev
-        const port = await getProxyPort();
+        const port = (window as any).PROXY_PORT;
+        if (typeof port !== 'number' || isNaN(port)) {
+            console.error('[RPC Bridge Error] PROXY_PORT is not defined on window object.');
+            throw new Error('PROXY_PORT_NOT_SET');
+        }
+
         const proxyUrl = `http://127.0.0.1:${port}/api/command`;
         const response = await fetch(proxyUrl, {
             method: 'POST',
@@ -146,17 +139,6 @@ export const rpcBridge: MicroZoukeiAPI = {
     isReady: () => {
         return bridgeReady;
     },
-
-    getProxyPort: async (): Promise<number> => {
-        if (typeof window !== 'undefined') {
-            const win = window as unknown as { microZoukei?: MicroZoukeiAPI; getProxyPort: () => Promise<number> };
-            if (win.getProxyPort) {
-                return await win.getProxyPort();
-            }
-        }
-        // Fallback for testing without Tauri
-        return 8080;
-    }
 };
 
 /**

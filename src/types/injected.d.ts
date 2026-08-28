@@ -26,9 +26,6 @@ export interface SyncFilesResponse {
  * RPC Bridge API exposed to the WebView environment
  */
 export interface MicroZoukeiAPI {
-    /** Get proxy port number (exposed for rpc-bridge to use) */
-    getProxyPort(): Promise<number>;
-
     /** List files in a directory */
     listFiles(path?: string): Promise<FileEntry[]>;
 

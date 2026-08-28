@@ -72,10 +72,8 @@ if (typeof window !== 'undefined') {
     console.log('[MicroZoukei] Injected script loaded and executing');
     cleanupInjectedScript();
 
-    // Expose getProxyPort to window for RPC bridge to use
-    (window as any).getProxyPort = async (): Promise<number> => {
-        return PROXY_PORT;
-    };
+    // Expose PROXY_PORT to window for RPC bridge to use directly
+    (window as any).PROXY_PORT = PROXY_PORT;
 
     void checkBridgeHealth().then((ready: boolean) => {
         bridgeReady = ready;
