@@ -22,7 +22,7 @@ const COMMAND_MAP: Record<string, string> = {
  */
 async function fetchCommand(options: { commandName: string; args?: any }): Promise<any> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
 
     try {
         // Use local proxy server instead of remote microstudio.dev
