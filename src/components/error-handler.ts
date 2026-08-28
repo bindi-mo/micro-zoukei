@@ -87,7 +87,6 @@ export function showError(options: ErrorOptions): void {
 export function hideAllErrors(): void {
     const errorElements = document.querySelectorAll(`.${ERROR_CLASS}`);
     errorElements.forEach(el => el.remove());
-    rpcBridge.logMessage('[MicroZoukei] All errors dismissed');
 }
 
 /**
