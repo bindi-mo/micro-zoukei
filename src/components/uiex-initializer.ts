@@ -193,8 +193,6 @@ const overrideSetSection = (appui: any): void => {
 
     // Override a function
     appui.setSection = function (section: string, useraction: boolean) {
-        console.log(`Called Section: ${section}`);
-
         // Declare a variable (the section name to be passed to
         // the original function)
         let targetSection = section;
