@@ -22,7 +22,6 @@ export const cleanupInjectedScript = (): void => {
     // Remove microZoukei from window if it exists
     if ((window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei) {
         delete (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei;
-        rpcBridge.logMessage('[MicroZoukei] Cleanup completed');
     }
 }
 
