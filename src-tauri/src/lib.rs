@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 #[cfg(debug_assertions)]
 use std::sync::mpsc::channel;
@@ -63,6 +64,39 @@ async fn send_chat_prompt(
             eprintln!("[tauri] network error: {:?}", e);
             Err(format!("Network error: {}", e))
         }
+    }
+}
+
+/// Gets the workspace path (`~/.productName`) and creates the directory
+/// if it does not exist. Accepts any type that implements `tauri::Manager`,
+/// such as `&tauri::App` or `&tauri::AppHandle`.
+pub fn get_or_create_workspace<R: tauri::Runtime, M: tauri::Manager<R>>(
+    manager: &M,
+) -> Result<PathBuf, String> {
+    // 1. Retrieve the productName from tauri.conf.json
+    let product_name = manager
+        .config()
+        .product_name
+        .clone()
+        .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_string());
+
+    // 2. Replace spaces with hyphens to make it safe for directory names
+    let safe_name = product_name.replace(' ', "-");
+
+    // 3. Resolve the HOME directory
+    if let Ok(mut path) = manager.path().home_dir() {
+        // 4. Append the dot-prefixed workspace folder (e.g., ~/.my-app-name)
+        path.push(format!(".{}", safe_name));
+
+        // 5. Create the directory if it doesn't exist
+        if !path.exists() {
+            fs::create_dir_all(&path)
+                .map_err(|e| format!("Failed to create workspace directory: {}", e))?;
+        }
+
+        Ok(path)
+    } else {
+        Err("Could not resolve the home directory.".to_string())
     }
 }
 
@@ -239,8 +273,19 @@ pub fn run() {
         .manage(app_state.clone())
         .invoke_handler(tauri::generate_handler![send_chat_prompt])
         .setup(move |app| {
-            let cache_dir = webview_cache_dir(app.handle());
+            // create workspace folder
+            match get_or_create_workspace(app) {
+                Ok(workspace_path) => {
+                    println!("Workspace path: {:?}", workspace_path);
+                    // You can perform further operations using the path here
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                }
+            }
+
             // Start proxy and block until its port is ready
+            let cache_dir = webview_cache_dir(app.handle());
             let proxy_cache_dir = cache_dir.clone();
             let port: u16;
             match proxy::start_proxy(proxy_cache_dir) {

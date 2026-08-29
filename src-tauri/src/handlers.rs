@@ -105,32 +105,6 @@ pub async fn handle_health() -> Result<serde_json::Value, String> {
     }))
 }
 
-pub async fn handle_sync_project(project_id: String) -> Result<serde_json::Value, String> {
-    let project_path = match project_id.as_str() {
-        "proj1" => "_data/project1",
-        "proj2" => "_data/project2",
-        _ => "_data/default",
-    };
-
-    if !std::path::Path::new(project_path).exists() {
-        fs::create_dir_all(project_path)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-
-    let list_res = handle_list_files(project_path.to_string()).await?;
-    let files = list_res["files"].as_array().cloned().unwrap_or_default();
-
-    println!("[sync] Starting sync for project: {}", project_id);
-    handle_sync_files(project_id.clone()).await?;
-
-    Ok(json!({
-        "status": "success",
-        "project_id": project_id,
-        "files_synced": files.len()
-    }))
-}
-
 pub async fn handle_sync_files(path: String) -> Result<serde_json::Value, String> {
     let list = handle_list_files(path).await?;
     let files = list["files"].as_array().cloned().unwrap_or_default();

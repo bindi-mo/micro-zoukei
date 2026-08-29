@@ -20,11 +20,6 @@ pub async fn mzd_delete_file(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn mzd_sync_project(project_id: String) -> Result<serde_json::Value, String> {
-    crate::handlers::handle_sync_project(project_id).await
-}
-
-#[tauri::command]
 pub async fn mzd_sync_files(path: String) -> Result<serde_json::Value, String> {
     crate::handlers::handle_sync_files(path).await
 }
@@ -92,17 +87,6 @@ pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
                 payload
                     .args
                     .get("path")
-                    .cloned()
-                    .unwrap_or_default()
-                    .to_string(),
-            )
-            .await,
-        ),
-        "mzd_sync_project" => map_error(
-            crate::handlers::handle_sync_project(
-                payload
-                    .args
-                    .get("project_id")
                     .cloned()
                     .unwrap_or_default()
                     .to_string(),
