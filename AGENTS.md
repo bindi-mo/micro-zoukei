@@ -39,7 +39,7 @@ MicroZoukei is a tool that bridges the workspace with `microstudio.dev` through 
 - **Documentation Sync**: Whenever technical architecture (system design, RPC model, proxy logic) is changed or updated, ensure that the `README.md` file is also updated to reflect these changes accurately for project overview purposes.
 - **Code Style**: All code comments and technical documentation MUST be in English.
 - **Version Control**: Commit at logical intervals (one feature/fix per commit). The agent will suggest when a good point to commit is reached.
-- **Error Handling Strategy**: After modifying Rust files, always run `cargo check` or the relevant build command immediately to identify and resolve compiler errors before proceeding with further developments.
+- **Error Handling Strategy**: After modifying Rust files, always immediately run `cargo check` or the associated build command to identify and resolve compiler errors before proceeding to the next stage of development. When running 'cargo check', navigate to the src-tauri/ directory and execute it there.
 
 # AI Behavioral Rules
 
