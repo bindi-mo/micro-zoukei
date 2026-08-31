@@ -1,4 +1,5 @@
 import { setupAgentChatWindow } from './agent-window';
+import { overrideProjectLoaded } from './project-files';
 
 let flag_morespace = false;
 let elm = null;
@@ -340,4 +341,6 @@ export const initializeAppExtension = (): void => {
     overrideSetSection(targetAppUi);
 
     setupAgentChatWindow();
+
+    overrideProjectLoaded();
 }

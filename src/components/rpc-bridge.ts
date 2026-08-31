@@ -4,14 +4,13 @@
  */
 
 import { bridgeReady } from '../injected';
-import type { FileEntry, MicroZoukeiAPI, SyncFilesResponse, SyncProjectResponse } from '../types/injected';
+import type { FileEntry, MicroZoukeiAPI, ProjectFileItem, SyncFilesResponse } from '../types/injected';
 
 const COMMAND_MAP: Record<string, string> = {
     listFiles: 'mzd_list_files',
     readFile: 'mzd_read_file',
     writeFile: 'mzd_write_file',
     deleteFile: 'mzd_delete_file',
-    syncProject: 'mzd_sync_project',
     syncFiles: 'mzd_sync_files',
     logMessage: 'mzd_log_message',
     health: 'mzd_health',
@@ -115,17 +114,10 @@ export const rpcBridge: MicroZoukeiAPI = {
         }) as boolean;
     },
 
-    syncProject: async (projectId?: string) => {
-        return await fetchCommand({
-            commandName: 'mzd_sync_project',
-            args: projectId ? { projectId } : undefined
-        }) as SyncProjectResponse;
-    },
-
-    syncFiles: async (projectId: string, path: string) => {
+    syncFiles: async (title: string, files: ProjectFileItem[]) => {
         return await fetchCommand({
             commandName: 'mzd_sync_files',
-            args: { projectId, path }
+            args: { title, files }
         }) as SyncFilesResponse;
     },
 

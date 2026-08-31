@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use tokio::fs;
 
@@ -105,23 +105,75 @@ pub async fn handle_health() -> Result<serde_json::Value, String> {
     }))
 }
 
-pub async fn handle_sync_files(path: String) -> Result<serde_json::Value, String> {
-    let list = handle_list_files(path).await?;
-    let files = list["files"].as_array().cloned().unwrap_or_default();
+pub async fn handle_sync_files(
+    title: String,
+    files: Vec<Value>,
+) -> Result<serde_json::Value, String> {
+    // Get or create workspace based on title (simplified - in real implementation would use a manager)
+    let save_path = crate::WORKSPACE_PATH.get()
+        .map(|path| path.join(title))
+        .ok_or_else(|| "The workspace path has not been initialized.".to_string())?;
+
+    let mut files_processed = 0;
+
+    if files.is_empty() {
+        print!("There are no files to sync. handle_sync_files");
+        return Ok(json!({
+            "status": "error",
+            "files_processed": files_processed
+        }));
+    }
 
     for file_obj in &files {
-        if let Some(f) = file_obj.get("path").and_then(|v| v.as_str()) {
-            match handle_read_file(f.to_string()).await {
-                Ok(content) => {
-                    let _ = handle_write_file(f.to_string(), content).await;
+        if let Some(file_path) = file_obj.get("file").and_then(|v| v.as_str()) {
+            let full_path = save_path.join(file_path);
+
+            if fs::metadata(&full_path).await.is_ok() {
+                println!("[sync] File already exists, skipping: {}", file_path);
+                continue;
+            } else {
+                if let Some(parent) = full_path.parent() {
+                    fs::create_dir_all(parent)
+                        .await
+                        .map_err(|e| e.to_string())?;
                 }
-                Err(_) => println!("[sync] Failed to sync file: {}", f),
             }
+
+            // Read content from the file object itself (content is provided in the frontend)
+            if let Some(content_str) = file_obj.get("content").and_then(|v| v.as_str()) {
+                match fs::write(&full_path, content_str).await {
+                    Ok(_) => {
+                        files_processed += 1;
+                        println!("file: {}", full_path.display());
+                    }
+                    Err(e) => println!("[sync] Failed to write file {}: {}", file_path, e),
+                }
+            } else if let Some(file_content) = file_obj.get("content").and_then(|v| v.as_str()) {
+                // Alternative: content might be at root level
+                match fs::write(&full_path, file_content).await {
+                    Ok(_) => files_processed += 1,
+                    Err(e) => println!("[sync] Failed to write file {}: {}", file_path, e),
+                }
+            } else {
+                println!("[sync] No content found for file: {}", file_path);
+            }
+        } else if let Some(file_content) = file_obj.get("content").and_then(|v| v.as_str()) {
+            // If no "file" key but has content, use the "file" field from object as path
+            let file_path = file_obj.get("file").and_then(|v| v.as_str()).unwrap_or("");
+
+            if !file_path.is_empty() {
+                match fs::write(resolve_path(file_path)?, file_content).await {
+                    Ok(_) => files_processed += 1,
+                    Err(e) => println!("[sync] Failed to write file {}: {}", file_path, e),
+                }
+            }
+        } else {
+            println!("[sync] Invalid file object structure");
         }
     }
 
     Ok(json!({
         "status": "success",
-        "files_processed": files.len()
+        "files_processed": files_processed
     }))
 }

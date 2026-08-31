@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 #[cfg(debug_assertions)]
 use std::sync::mpsc::channel;
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,6 +20,8 @@ pub mod network;
 pub mod proxy;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
+
+pub static WORKSPACE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Default)]
 pub struct AppState {
@@ -278,6 +281,7 @@ pub fn run() {
                 Ok(workspace_path) => {
                     println!("Workspace path: {:?}", workspace_path);
                     // You can perform further operations using the path here
+                    let _ = WORKSPACE_PATH.set(workspace_path);
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);

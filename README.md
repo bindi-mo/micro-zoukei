@@ -11,7 +11,7 @@ The proxy acts as the central gateway for all web requests:
 - **Script Injection**: The proxy automatically injects a bridge script (`injected.js`) into HTML responses from remote sites, enabling seamless communication between the browser's environment and our Rust backend.
 
 ### 2. Rust RPC Model (`commands.rs`)
-All interactions with your local filesystem or project state are encapsulated in Rust commands prefixed with `mzd_` (e.g., `mzd_read_file`, `mzd_sync_project`). This ensures that:
+All interactions with your local filesystem or project state are encapsulated in Rust commands prefixed with `mzd_` (e.g., `mzd_read_file`, `mzd_sync_files`). This ensures that:
 - File path resolution is handled consistently by the core logic.
 - Project states remain synchronized between the UI and the background backend.
 
@@ -23,7 +23,7 @@ The frontend component is minimized. Primary interaction occurs through the inje
 To build and run the project:
 
 1.  **Install Dependencies**: Ensure you have Rust, Node.js, and the necessary build tools installed.
-2.  **Build & Run**: 
+2.  **Build & Run**:
     ```bash
     npm install
     npm run tauri dev

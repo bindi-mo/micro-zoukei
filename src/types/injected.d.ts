@@ -10,16 +10,11 @@ export interface FileEntry {
     modified?: Date;
 }
 
-export interface SyncProjectResponse {
-    success: boolean;
-    message?: string;
-    files_synced?: number;
-}
-
 export interface SyncFilesResponse {
     success: boolean;
     message?: string;
     errors?: Array<{ path: string; error: string }>;
+    files_processed?: number;
 }
 
 /**
@@ -38,11 +33,8 @@ export interface MicroZoukeiAPI {
     /** Delete a file */
     deleteFile(path: string): Promise<boolean>;
 
-    /** Sync project state */
-    syncProject(projectId?: string): Promise<SyncProjectResponse>;
-
-    /** Sync specific files */
-    syncFiles(projectId: string, path: string): Promise<SyncFilesResponse>;
+    /** Sync project files to local workspace */
+    syncFiles(title: string, files: ProjectFileItem[]): Promise<SyncFilesResponse>;
 
     /** Log a message to the backend */
     logMessage(message: string): Promise<void>;
@@ -52,9 +44,10 @@ export interface MicroZoukeiAPI {
 }
 
 /**
- * Tauri command invocation options
+ * Represents an individual file in a project for synchronization.
  */
-export interface InvokeOptions {
-    commandName: string;
-    args?: Record<string, unknown>;
+export interface ProjectFileItem {
+    file: string;
+    content: string;
+    isBinaryBase64: boolean;
 }

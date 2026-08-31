@@ -1,19 +1,14 @@
 var InjectedScript = (function(exports) {
   "use strict";
-  async function getProxyPort() {
-    if (typeof window !== "undefined") {
-      const win = window;
-      if (win.getProxyPort) {
-        return await win.getProxyPort();
-      }
-    }
-    return 8080;
-  }
   async function fetchCommand(options) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3e4);
+    const timeoutId = setTimeout(() => controller.abort(), 5e3);
     try {
-      const port = await getProxyPort();
+      const port = window.PROXY_PORT;
+      if (typeof port !== "number" || isNaN(port)) {
+        console.error("[RPC Bridge Error] PROXY_PORT is not defined on window object.");
+        throw new Error("PROXY_PORT_NOT_SET");
+      }
       const proxyUrl = `http://127.0.0.1:${port}/api/command`;
       const response = await fetch(proxyUrl, {
         method: "POST",
@@ -78,16 +73,10 @@ var InjectedScript = (function(exports) {
         args: { path }
       });
     },
-    syncProject: async (projectId) => {
-      return await fetchCommand({
-        commandName: "mzd_sync_project",
-        args: projectId ? { projectId } : void 0
-      });
-    },
-    syncFiles: async (projectId, path) => {
+    syncFiles: async (title, files) => {
       return await fetchCommand({
         commandName: "mzd_sync_files",
-        args: { projectId, path }
+        args: { title, files }
       });
     },
     logMessage: async (message) => {
@@ -98,15 +87,6 @@ var InjectedScript = (function(exports) {
     },
     isReady: () => {
       return exports.bridgeReady;
-    },
-    getProxyPort: async () => {
-      if (typeof window !== "undefined") {
-        const win = window;
-        if (win.getProxyPort) {
-          return await win.getProxyPort();
-        }
-      }
-      return 8080;
     }
   };
   async function checkBridgeHealth() {
@@ -175,7 +155,6 @@ var InjectedScript = (function(exports) {
   function hideAllErrors() {
     const errorElements = document.querySelectorAll(`.${ERROR_CLASS}`);
     errorElements.forEach((el) => el.remove());
-    rpcBridge.logMessage("[MicroZoukei] All errors dismissed");
   }
   function escapeHtml(text) {
     const div = document.createElement("div");
@@ -352,6 +331,183 @@ var InjectedScript = (function(exports) {
     });
     console.log("The UI for the Agent chat window is now ready.");
   };
+  const getTargetExtensions = (lang) => {
+    const langLower = lang.toLowerCase();
+    if (["python"].includes(langLower)) {
+      return [".py"];
+    }
+    if (["javascript"].includes(langLower)) {
+      return [".js"];
+    }
+    if (["lua"].includes(langLower)) {
+      return [".lua"];
+    }
+    return [];
+  };
+  const convertFileExtensions = (filelist, lang) => {
+    const targetExts = getTargetExtensions(lang);
+    if (targetExts.length === 0) {
+      return filelist;
+    }
+    return filelist.map((item) => {
+      if (!item.file.toLowerCase().endsWith(".ms")) {
+        return item;
+      }
+      const dir = item.file.substring(0, item.file.lastIndexOf("/"));
+      const baseName = item.file.substring(item.file.lastIndexOf("/") + 1);
+      const nameWithoutExt = baseName.replace(/\.ms$/i, "");
+      const targetFiles = [];
+      for (const ext of targetExts) {
+        const targetPath = dir !== "" ? `${dir}/${nameWithoutExt}${ext}` : `${nameWithoutExt}${ext}`;
+        targetFiles.push({
+          file: targetPath,
+          content: item.content,
+          isBinaryBase64: item.isBinaryBase64
+        });
+      }
+      return targetFiles.length > 0 ? targetFiles[0] : item;
+    }).flat();
+  };
+  const saveAllFilesToLocal = async (title, lang, filelist) => {
+    const processedFileList = convertFileExtensions(filelist, lang);
+    console.log("Saving files locally:", title, lang, processedFileList.length);
+    console.log(processedFileList);
+    if (processedFileList.length > 0) {
+      await rpcBridge.syncFiles(title, processedFileList);
+    } else {
+      console.log("not found files");
+    }
+  };
+  const fetchAsBase64 = async (url) => {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64Url = reader.result;
+        resolve(base64Url.split(",")[1]);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+  const processFileItem = async (item) => {
+    let fileContent = "";
+    let isBinaryBase64 = false;
+    if (typeof item.content === "string") {
+      fileContent = item.content;
+    } else if (typeof item.url === "string" && item.url.trim() !== "") {
+      try {
+        fileContent = await fetchAsBase64(item.url);
+        isBinaryBase64 = true;
+      } catch (e) {
+        console.error(`[Sync Fetch Error] ${item.url}:`, e);
+        return null;
+      }
+    }
+    return {
+      file: item.file.replace(/-/g, "/"),
+      content: fileContent,
+      isBinaryBase64
+    };
+  };
+  const processFileGroup = async (fileTypeItems) => {
+    const groupResults = [];
+    for (const item of fileTypeItems) {
+      const processedItem = await processFileItem(item);
+      if (processedItem) {
+        groupResults.push(processedItem);
+      }
+    }
+    return groupResults;
+  };
+  const getMicroStudioFileList = async () => {
+    const project = window.app?.project;
+    if (!project) {
+      console.error("There is no information about the project.");
+      return [];
+    }
+    if (!Array.isArray(project.file_types)) {
+      return [];
+    }
+    const fileList = [];
+    for (const type of project.file_types) {
+      const listKey = `${type}_list`;
+      const fileTypeItems = project[listKey];
+      if (Array.isArray(fileTypeItems)) {
+        const groupResults = await processFileGroup(fileTypeItems);
+        fileList.push(...groupResults);
+      }
+    }
+    return fileList;
+  };
+  const isProjectDataReady = (project) => {
+    if (!Array.isArray(project.file_types)) return false;
+    for (const type of project.file_types) {
+      const listKey = `${type}_list`;
+      const fileTypeItems = project[listKey];
+      if (Array.isArray(fileTypeItems)) {
+        for (const item of fileTypeItems) {
+          if (!item) continue;
+          if (type === "source") {
+            const isFetched = typeof item.fetched === "boolean" ? item.fetched : true;
+            const hasContent = typeof item.content === "string" && item.content.length > 0;
+            if (!isFetched && !hasContent) {
+              return false;
+            }
+          } else {
+            const hasUrl = typeof item.url === "string" && item.url.trim() !== "";
+            const hasFile = typeof item.file === "string" && item.file.trim() !== "";
+            if (!hasUrl && !hasFile) {
+              return false;
+            }
+          }
+        }
+      }
+    }
+    return true;
+  };
+  let isProjectAlreadySaved = false;
+  const overrideProjectLoaded = () => {
+    const mainApp = window.app;
+    if (!mainApp || typeof mainApp.openProject !== "function") {
+      console.error("Not found window.app.openProject.");
+      return;
+    }
+    if (mainApp.openProject.__isOverridden) return;
+    const originalOpenProject = mainApp.openProject;
+    const newOpenProject = function(...args) {
+      const result = originalOpenProject.apply(this, args);
+      isProjectAlreadySaved = false;
+      let checkCount = 0;
+      const MAX_CHECKS = 20;
+      const waitForSourceList = async () => {
+        if (isProjectAlreadySaved) return;
+        const project = window.app?.project;
+        if (project && Array.isArray(project.source_list) && project.source_list.length > 0 && isProjectDataReady(project)) {
+          const lang = project.language;
+          const title = project.title;
+          isProjectAlreadySaved = true;
+          const currentFiles = await getMicroStudioFileList();
+          if (currentFiles.length > 0) {
+            saveAllFilesToLocal(title, lang, currentFiles);
+          }
+          return;
+        }
+        checkCount++;
+        if (checkCount >= MAX_CHECKS) {
+          console.warn(`⚠️ time out`);
+          return;
+        }
+        setTimeout(waitForSourceList, 200);
+      };
+      waitForSourceList();
+      return result;
+    };
+    newOpenProject.__isOverridden = true;
+    mainApp.openProject = newOpenProject;
+    console.log("The event hook for `window.app.openProject` has completed.");
+  };
   let flag_morespace = false;
   let elm = null;
   let morespace_icon = document.createElement("i");
@@ -508,7 +664,6 @@ var InjectedScript = (function(exports) {
     }
     const originalSetSection = appui.setSection;
     appui.setSection = function(section, useraction) {
-      console.log(`Called Section: ${section}`);
       let targetSection = section;
       if (section === "agent") {
         targetSection = "code";
@@ -550,6 +705,9 @@ var InjectedScript = (function(exports) {
   const injectRequiredStyles = () => {
     const style = document.createElement("style");
     style.textContent = `
+    .projectoption select {
+      color: rgba(0,0,0, .8)
+    }
     .projectheader #project-morespace {
       margin: 0 10px 0 0 ;
       color: rgba(255,255,255,.5);
@@ -598,6 +756,7 @@ var InjectedScript = (function(exports) {
     injectAgentMenuItem(targetAppUi);
     overrideSetSection(targetAppUi);
     setupAgentChatWindow();
+    overrideProjectLoaded();
   };
   const PROXY_PORT = 8080;
   exports.bridgeReady = false;
@@ -605,7 +764,6 @@ var InjectedScript = (function(exports) {
     hideAllErrors();
     if (window.microZoukei) {
       delete window.microZoukei;
-      rpcBridge.logMessage("[MicroZoukei] Cleanup completed");
     }
   };
   async function withLoading(operation, message) {
@@ -633,9 +791,7 @@ var InjectedScript = (function(exports) {
   if (typeof window !== "undefined") {
     console.log("[MicroZoukei] Injected script loaded and executing");
     cleanupInjectedScript();
-    window.getProxyPort = async () => {
-      return PROXY_PORT;
-    };
+    window.PROXY_PORT = PROXY_PORT;
     void checkBridgeHealth().then((ready) => {
       exports.bridgeReady = ready;
       if (exports.bridgeReady) {
