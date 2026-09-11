@@ -384,8 +384,34 @@ self.addEventListener('fetch', (e) => {
         upstream.push_str(&raw_query);
     }
 
-    // compute cache key
-    let key = blake3::hash(upstream.as_bytes()).to_hex().to_string();
+    // compute cache key - normalize by removing query parameters for cacheable resources
+    // to avoid cache misses due to cache-busting query params (e.g., ?v=timestamp)
+    let cache_key_url = {
+        let mut url = upstream.clone();
+        if let Some(query_pos) = url.find('?') {
+            // Check if the path suggests a static asset that should ignore query params
+            let path_part = &url[..query_pos];
+            let is_likely_static_asset = path_part.ends_with(".png")
+                || path_part.ends_with(".jpg")
+                || path_part.ends_with(".jpeg")
+                || path_part.ends_with(".gif")
+                || path_part.ends_with(".webp")
+                || path_part.ends_with(".svg")
+                || path_part.ends_with(".ico")
+                || path_part.ends_with(".woff")
+                || path_part.ends_with(".woff2")
+                || path_part.ends_with(".ttf")
+                || path_part.ends_with(".eot")
+                || path_part.ends_with(".css")
+                || path_part.ends_with(".js")
+                || path_part.ends_with(".map");
+            if is_likely_static_asset {
+                url = path_part.to_string();
+            }
+        }
+        url
+    };
+    let key = blake3::hash(cache_key_url.as_bytes()).to_hex().to_string();
     let body_path = cache_dir.join(format!("{}.body", key));
     let meta_path = cache_dir.join(format!("{}.meta.json", key));
 
