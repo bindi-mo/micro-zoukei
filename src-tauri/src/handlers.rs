@@ -1,3 +1,4 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -109,66 +110,85 @@ pub async fn handle_sync_files(
     title: String,
     files: Vec<Value>,
 ) -> Result<serde_json::Value, String> {
-    // Get or create workspace based on title (simplified - in real implementation would use a manager)
-    let save_path = crate::WORKSPACE_PATH.get()
-        .map(|path| path.join(title))
+    let save_path = crate::WORKSPACE_PATH
+        .get()
+        .map(|path| path.join(&title))
         .ok_or_else(|| "The workspace path has not been initialized.".to_string())?;
 
-    let mut files_processed = 0;
-
     if files.is_empty() {
-        print!("There are no files to sync. handle_sync_files");
+        println!("[sync] There are no files to sync.");
         return Ok(json!({
             "status": "error",
-            "files_processed": files_processed
+            "files_processed": 0
         }));
     }
 
+    let mut files_processed = 0;
+
     for file_obj in &files {
-        if let Some(file_path) = file_obj.get("file").and_then(|v| v.as_str()) {
-            let full_path = save_path.join(file_path);
-
-            if fs::metadata(&full_path).await.is_ok() {
-                println!("[sync] File already exists, skipping: {}", file_path);
+        // 1. Getting the File Path
+        let file_path = match file_obj.get("file").and_then(|v| v.as_str()) {
+            Some(path) if !path.is_empty() => path,
+            _ => {
+                println!("[sync] Invalid or missing 'file' key");
                 continue;
-            } else {
-                if let Some(parent) = full_path.parent() {
-                    fs::create_dir_all(parent)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                }
             }
+        };
 
-            // Read content from the file object itself (content is provided in the frontend)
-            if let Some(content_str) = file_obj.get("content").and_then(|v| v.as_str()) {
-                match fs::write(&full_path, content_str).await {
-                    Ok(_) => {
-                        files_processed += 1;
-                        println!("file: {}", full_path.display());
-                    }
-                    Err(e) => println!("[sync] Failed to write file {}: {}", file_path, e),
-                }
-            } else if let Some(file_content) = file_obj.get("content").and_then(|v| v.as_str()) {
-                // Alternative: content might be at root level
-                match fs::write(&full_path, file_content).await {
-                    Ok(_) => files_processed += 1,
-                    Err(e) => println!("[sync] Failed to write file {}: {}", file_path, e),
-                }
-            } else {
+        // 2. Retrieving Content (String)
+        let content_str = match file_obj.get("content").and_then(|v| v.as_str()) {
+            Some(c) => c,
+            None => {
                 println!("[sync] No content found for file: {}", file_path);
+                continue;
             }
-        } else if let Some(file_content) = file_obj.get("content").and_then(|v| v.as_str()) {
-            // If no "file" key but has content, use the "file" field from object as path
-            let file_path = file_obj.get("file").and_then(|v| v.as_str()).unwrap_or("");
+        };
 
-            if !file_path.is_empty() {
-                match fs::write(resolve_path(file_path)?, file_content).await {
-                    Ok(_) => files_processed += 1,
-                    Err(e) => println!("[sync] Failed to write file {}: {}", file_path, e),
+        // 3. Check the isBinaryBase64 flag and prepare the data (byte sequence) to be written
+        let is_binary = file_obj
+            .get("isBinaryBase64")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let bytes: Vec<u8> = if is_binary {
+            // For binary (Base64) data: Decoding process
+            match base64::engine::general_purpose::STANDARD.decode(content_str) {
+                Ok(decoded) => decoded,
+                Err(e) => {
+                    println!("[sync] Failed to decode base64 for {}: {}", file_path, e);
+                    continue; // If the Base64 is invalid, skip it at this point (without triggering any I/O).
                 }
             }
         } else {
-            println!("[sync] Invalid file object structure");
+            // For ASCII/text: Convert directly to a byte array
+            content_str.as_bytes().to_vec()
+        };
+
+        // 4. File Path Resolution and Duplicate Checks (I/O Processing)
+        let full_path = save_path.join(file_path);
+
+        if fs::metadata(&full_path).await.is_ok() {
+            println!("[sync] File already exists, skipping: {}", file_path);
+            continue;
+        }
+
+        // 5. Creating and Writing to Directories (I/O Processing)
+        if let Some(parent) = full_path.parent() {
+            if let Err(e) = fs::create_dir_all(parent).await {
+                println!(
+                    "[sync] Failed to create parent directory for {}: {}",
+                    file_path, e
+                );
+                continue;
+            }
+        }
+
+        match fs::write(&full_path, &bytes).await {
+            Ok(_) => {
+                files_processed += 1;
+                println!("[sync] Wrote file: {}", full_path.display());
+            }
+            Err(e) => println!("[sync] Failed to write file {}: {}", file_path, e),
         }
     }
 
