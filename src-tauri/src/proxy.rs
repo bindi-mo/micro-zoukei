@@ -67,9 +67,15 @@ fn migrate_local_storage(cache_dir: &Path, new_port: u16) {
 
                         // Once the copy is complete, delete the old files that are no longer needed.
                         if let Err(e) = fs::remove_file(&old_file_path) {
-                            eprintln!("[proxy] ⚠️ Failed to delete old files: {}, Reason: {}", old_filename, e);
+                            eprintln!(
+                                "[proxy] ⚠️ Failed to delete old files: {}, Reason: {}",
+                                old_filename, e
+                            );
                         } else {
-                            println!("[proxy] 🧹 I deleted some old junk files.: {}", old_filename);
+                            println!(
+                                "[proxy] 🧹 I deleted some old junk files.: {}",
+                                old_filename
+                            );
                         }
                     }
                 }

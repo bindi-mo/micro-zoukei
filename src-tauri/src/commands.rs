@@ -1,5 +1,6 @@
 use crate::handlers::{map_error, CommandPayload, CommandResponse};
 use serde_json::Value;
+
 pub async fn mzd_list_files(path: String) -> Result<serde_json::Value, String> {
     crate::handlers::handle_list_files(path).await
 }
@@ -122,10 +123,7 @@ pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
             )
             .await,
         ),
-        "mzd_health" => map_error(
-            crate::handlers::handle_health()
-                .await,
-        ),
+        "mzd_health" => map_error(crate::handlers::handle_health().await),
         _ => CommandResponse::error(format!("Unknown command: {}", payload.command)),
     }
 }
