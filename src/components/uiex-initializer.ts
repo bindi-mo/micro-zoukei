@@ -266,6 +266,9 @@ const overrideSetSection = (appui: any): void => {
 const injectRequiredStyles = (): void => {
     const style = document.createElement('style');
     style.textContent = `
+    .projectoption select {
+      color: rgba(0,0,0, .8)
+    }
     .projectheader #project-morespace {
       margin: 0 10px 0 0 ;
       color: rgba(255,255,255,.5);
