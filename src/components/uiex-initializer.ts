@@ -1,3 +1,4 @@
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { setupAgentChatWindow } from './agent-window';
 import { overrideProjectLoaded } from './project-files';
 
@@ -175,12 +176,75 @@ const removeElements = (): void => {
     if (communityLink) {
         communityLink.remove();
     }
-
-    const oldButton = document.getElementById("project-fullscreen");
-    if (oldButton) {
-        oldButton.remove();
-    }
 }
+
+const overrideCreateFullscreenFeatures = (appui: any): void => {
+    if (!appui || typeof appui.createFullscreenFeatures !== 'function') {
+        console.error('Not found appui.createFullscreenFeatures function');
+        return;
+    }
+
+    const appWindow = getCurrentWebviewWindow();
+    const setupTauriFullscreen = () => {
+        const button = document.getElementById("project-fullscreen");
+
+        if (button) {
+            // [Most Important] By cloning and replacing the original Listener
+            // element that causes crashes—which has already been registered—you
+            // can completely remove it (force a reset).
+            const newButton = button.cloneNode(true) as HTMLElement;
+            button.parentNode?.replaceChild(newButton, button);
+
+            // Register a secure Tauri listener for the new button
+            newButton.addEventListener("click", async (e) => {
+                try {
+                    const isFullscreen = await appWindow.isFullscreen();
+                    if (isFullscreen) {
+                        await appWindow.setFullscreen(false);
+                        Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
+                        window.dispatchEvent(new Event('fullscreenchange'));
+                    } else {
+                        await appWindow.setFullscreen(true);
+                        Object.defineProperty(document, 'fullscreenElement', {
+                            value: document.getElementById("projectview"),
+                            configurable: true
+                        });
+                        window.dispatchEvent(new Event('fullscreenchange'));
+                    }
+                } catch (err) {
+                    console.error("Tauri Fullscreen Error:", err);
+                }
+            });
+
+            // Logic for switching icons and background colors
+            // (inherits the display logic from the original code)
+            window.addEventListener("fullscreenchange", () => {
+                const projectview = document.getElementById("projectview");
+                if (projectview) {
+                    if (document.fullscreenElement) {
+                        newButton.classList.remove("fa-expand");
+                        newButton.classList.add("fa-compress");
+                        projectview.style.background = "hsl(200,20%,15%)";
+                    } else {
+                        newButton.classList.add("fa-expand");
+                        newButton.classList.remove("fa-compress");
+                        projectview.style.background = "none";
+                    }
+                }
+            });
+        } else {
+            console.log("The specified `#project-fullscreen` element was not found.");
+        }
+    };
+
+    // 1. Override the instance method itself directly so that it will work properly when called in the future.
+    appui.createFullscreenFeatures = function () {
+        setupTauriFullscreen();
+    };
+
+    // 2. Since it has already been executed on the microStudio side, it will be applied immediately.
+    setupTauriFullscreen();
+};
 
 const overrideSetSection = (appui: any): void => {
 
@@ -270,7 +334,7 @@ const injectRequiredStyles = (): void => {
       color: rgba(0,0,0, .8)
     }
     .projectheader #project-morespace {
-      margin: 0 10px 0 0 ;
+      margin: 0;
       color: rgba(255,255,255,.5);
       border-radius: 3px ;
       padding: 4px;
@@ -342,6 +406,7 @@ export const initializeAppExtension = (): void => {
     const targetAppUi = (window as any).app?.appui;
     injectAgentMenuItem(targetAppUi);
     overrideSetSection(targetAppUi);
+    overrideCreateFullscreenFeatures(targetAppUi);
 
     setupAgentChatWindow();
 
