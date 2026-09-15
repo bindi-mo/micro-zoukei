@@ -1,5 +1,4 @@
 use crate::agent::tools::{ReadFileTool, ViewFileStructureTool, WriteFileTool};
-use crate::config::load_config;
 use rig::agent::AgentBuilder;
 use rig::client::CompletionClient;
 use rig::completion::Prompt;
@@ -21,7 +20,7 @@ fn resolve_api_key(config_key: &str, default_env: &str) -> Result<String, String
 
 pub async fn run_agent(prompt: String) -> Result<String, String> {
     // 1. Load configuration
-    let config = load_config()?;
+    let config = crate::config::load_default_config()?;
 
     // 2. Create the LLM client based on the configured provider
     let provider = config.chat.provider.to_lowercase();
