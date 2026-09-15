@@ -250,5 +250,5 @@ lancedb:
 | **Diff Recording** | Replaced stub with real rusqlite implementation (`init_db`, `save_diff`, `get_all_diffs`, `get_diffs_for_file`, `delete_diffs_for_file`, `delete_all_diffs`, `compute_diff`) |
 | **RAG Integration** | Added `rag::rag_query_answer()` call before sending prompt to LLM in executor |
 | **Endpoints** | Added per-provider endpoint support for OpenAI and OpenRouter via `Client::builder().base_url()` |
-| **File Monitoring** | Added `spawn_project_watcher()` in `lib.rs` using `notify` to detect `.txt`/`.md` changes and re-index LanceDB |
+| **File Monitoring** | Added `spawn_knowledge_watcher()` in `rag.rs` using `notify` to detect `.txt`/`.md` changes and re-index LanceDB |
 | **Diff Recording in Handlers** | `handle_write_file()` and `handle_sync_files()` now compute and save diffs before writing |
