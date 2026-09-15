@@ -1,5 +1,7 @@
 use arrow_array::{types::Float64Type, ArrayRef, FixedSizeListArray, RecordBatch, StringArray};
 use lancedb;
+#[cfg(debug_assertions)]
+use notify::{recommended_watcher, Config, RecursiveMode, Watcher};
 use rig::client::{CompletionClient, EmbeddingsClient, ProviderClient};
 use rig::embeddings::{Embedding, EmbeddingsBuilder};
 use rig::lancedb::{LanceDbVectorIndex, SearchParams};
@@ -8,7 +10,11 @@ use rig::providers::{ollama, openai, openrouter};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::mpsc::channel;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Emitter;
 use walkdir::WalkDir;
 
 pub enum SupportedClient {
@@ -198,4 +204,97 @@ pub async fn rag_query_answer(
     };
 
     Ok(response)
+}
+
+/// Start a file watcher on the knowledge directory.
+///
+/// When source files (.txt, .md) are created, modified, or removed,
+/// the RAG index is automatically re-indexed via `agent::rag::rag_inject_documents`.
+#[cfg(debug_assertions)]
+pub fn spawn_knowledge_watcher(app_handle: tauri::AppHandle, knowledge_path: PathBuf) {
+    std::thread::spawn(move || {
+        let (tx, rx) = channel();
+
+        let mut watcher = match recommended_watcher(move |res| {
+            let _ = tx.send(res);
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[tauri] failed to start project watcher: {:?}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.configure(Config::default()) {
+            eprintln!("[tauri] failed to configure project watcher: {:?}", e);
+        }
+
+        if let Err(e) = watcher.watch(&knowledge_path, RecursiveMode::Recursive) {
+            eprintln!("[tauri] project watcher failed to watch path: {:?}", e);
+            return;
+        }
+
+        println!("[tauri] project watcher started on {:?}", knowledge_path);
+
+        // Debounce: ignore events within 2 seconds of the last re-index
+        let mut last_reindex: u64 = 0;
+
+        for event in rx {
+            match event {
+                Ok(event) => {
+                    // Only react to file creation/modification/deletion
+                    let is_relevant = event
+                        .paths
+                        .iter()
+                        .any(|p| p.extension().is_some_and(|ext| ext == "txt" || ext == "md"));
+                    if !is_relevant {
+                        continue;
+                    }
+
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+
+                    if now - last_reindex < 2000 {
+                        continue; // debounce
+                    }
+                    last_reindex = now;
+
+                    println!("[tauri] Project file changed, triggering RAG re-index...");
+
+                    // Spawn async re-indexing task
+                    let app_handle_cloned = app_handle.clone();
+                    let ws_path = knowledge_path.clone();
+                    tokio::spawn(async move {
+                        let db_path = ws_path.join("lancedb");
+                        let config = match crate::config::load_default_config() {
+                            Ok(c) => c,
+                            Err(e) => {
+                                eprintln!("[tauri] failed to load config for re-index: {}", e);
+                                return;
+                            }
+                        };
+                        match crate::agent::rag::rag_inject_documents(
+                            &config.rag.provider,
+                            &config.rag.model,
+                            &ws_path.to_string_lossy(),
+                            &db_path.to_string_lossy(),
+                        )
+                        .await
+                        {
+                            Ok(count) => {
+                                println!("[tauri] RAG re-index complete: {} documents", count);
+                                let _ = app_handle_cloned.emit("rag-reindexed", count);
+                            }
+                            Err(e) => {
+                                eprintln!("[tauri] RAG re-index failed: {}", e);
+                            }
+                        }
+                    });
+                }
+                Err(e) => eprintln!("[tauri] project watcher error: {:?}", e),
+            }
+        }
+    });
 }
