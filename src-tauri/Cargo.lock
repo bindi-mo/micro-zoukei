@@ -5140,12 +5140,12 @@ dependencies = [
  "lancedb",
  "mime_guess",
  "notify",
+ "noyalib",
  "reqwest 0.13.5",
  "rig",
  "rusqlite",
  "serde",
  "serde_json",
- "serde_yml",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
@@ -5425,14 +5425,19 @@ dependencies = [
 
 [[package]]
 name = "noyalib"
-version = "0.0.5"
+version = "0.0.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e493c05128df7a83b9676b709d590e0ebc285c7ed3152bc679668e8c1e506af5"
+checksum = "55f03682003f288e23f94d8f6222de0dcf15c77329b5e42b2f37421243c1d373"
 dependencies = [
+ "hashbrown 0.17.1",
  "indexmap 2.14.0",
+ "itoa",
+ "libm",
  "memchr",
  "rustc-hash",
- "serde",
+ "ryu",
+ "serde_core",
+ "serde_ignored",
  "smallvec",
 ]
 
@@ -7500,6 +7505,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_ignored"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
+dependencies = [
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_json"
 version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7597,16 +7612,6 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
-]
-
-[[package]]
-name = "serde_yml"
-version = "0.0.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "909764a65f86829ccdb5eea9ab355843aa02c019a7bfd47465092953565caa05"
-dependencies = [
- "noyalib",
- "serde",
 ]
 
 [[package]]

@@ -4,7 +4,7 @@ MicroZoukei is a tool that bridges the workspace with `microstudio.dev` through 
 
 ## Architecture Overview
 
-- **Config**: `template.config.yaml` → `$HOME/.micro-zoukei/config.yml`
+- **Config**: `template.config.yml` → `$HOME/.micro-zoukei/config.[yml|yaml]`
 - **Agent**: `src-tauri/src/agent/` (rag, executor, tools)
 - **Diff**: `src-tauri/src/diff.rs` + SQLite (`rusqlite`)
 - **Tests**: `src-tauri/tests/`
