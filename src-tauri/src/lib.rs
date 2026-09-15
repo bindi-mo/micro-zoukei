@@ -18,6 +18,9 @@ pub mod commands;
 pub mod handlers;
 pub mod network;
 pub mod proxy;
+pub mod config;
+pub mod diff;
+pub mod agent;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -26,48 +29,6 @@ pub static WORKSPACE_PATH: OnceLock<PathBuf> = OnceLock::new();
 #[derive(Default)]
 pub struct AppState {
     proxy_port: Option<u16>,
-}
-
-#[tauri::command]
-async fn send_chat_prompt(
-    window: tauri::WebviewWindow,
-    message: String,
-    app_state: tauri::State<'_, Arc<Mutex<AppState>>>,
-) -> Result<(), String> {
-    println!("[CHAT RECEIVED] {}", message);
-
-    let client = network::NetworkClient::new();
-    let port = app_state
-        .lock()
-        .map_err(|e| e.to_string())?
-        .proxy_port
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "8080".to_string());
-
-    let url = format!("http://127.0.0.1:{}/v1/chat", port);
-    let body = serde_json::json!({ "message": message });
-
-    match client
-        .send_request(reqwest::Method::POST, &url, Some(body))
-        .await
-    {
-        Ok(response) => {
-            let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-            let reply: serde_json::Value =
-                serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-
-            let script = format!(
-                "if (window.microZoukeiReceiveResponse) {{ window.microZoukeiReceiveResponse({}); }}",
-                serde_json::to_string(&reply).map_err(|e| e.to_string())?
-            );
-            window.eval(&script).map_err(|e| e.to_string())?;
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("[tauri] network error: {:?}", e);
-            Err(format!("Network error: {}", e))
-        }
-    }
 }
 
 /// Gets the workspace path (`~/.productName`) and creates the directory
@@ -274,7 +235,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(app_state.clone())
-        .invoke_handler(tauri::generate_handler![send_chat_prompt])
         .setup(move |app| {
             // create workspace folder
             match get_or_create_workspace(app) {

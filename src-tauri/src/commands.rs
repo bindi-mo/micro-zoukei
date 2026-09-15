@@ -38,6 +38,12 @@ pub async fn mzd_health() -> Result<serde_json::Value, String> {
     crate::handlers::handle_health().await
 }
 
+#[tauri::command]
+pub async fn mzd_run_agent(prompt: String) -> Result<String, String> {
+    crate::agent::executor::run_agent(prompt).await
+}
+
+
 // Dispatcher function - handles incoming HTTP requests from the frontend
 pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -124,6 +130,17 @@ pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
             .await,
         ),
         "mzd_health" => map_error(crate::handlers::handle_health().await),
+        "mzd_run_agent" => map_error(
+            crate::commands::mzd_run_agent(
+                payload
+                    .args
+                    .get("prompt")
+                    .cloned()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+            .await,
+        ),
         _ => CommandResponse::error(format!("Unknown command: {}", payload.command)),
     }
 }
