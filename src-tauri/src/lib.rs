@@ -14,13 +14,13 @@ use tauri::window::Color;
 use tauri::Manager;
 use tauri::{Url, WebviewWindowBuilder};
 
+pub mod agent;
 pub mod commands;
+pub mod config;
+pub mod diff;
 pub mod handlers;
 pub mod network;
 pub mod proxy;
-pub mod config;
-pub mod diff;
-pub mod agent;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
