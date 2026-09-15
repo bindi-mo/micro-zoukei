@@ -56,6 +56,14 @@ pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
     Ok(full_path)
 }
 
+// Helper: get the diff database path from the workspace
+fn diff_db_path() -> PathBuf {
+    crate::WORKSPACE_PATH
+        .get()
+        .map(|p| p.join("diffs.db"))
+        .unwrap_or_else(|| PathBuf::from("diffs.db"))
+}
+
 pub async fn handle_list_files(path: String) -> Result<serde_json::Value, String> {
     let full_path = resolve_path(&path)?;
     let mut files = Vec::new();
@@ -80,6 +88,20 @@ pub async fn handle_read_file(path: String) -> Result<String, String> {
 
 pub async fn handle_write_file(path: String, content: String) -> Result<bool, String> {
     let full_path = resolve_path(&path)?;
+
+    // Compute diff before writing
+    let old_content = if full_path.exists() {
+        fs::read_to_string(&full_path).await.unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // Save diff to rusqlite
+    let diff_text = crate::diff::compute_diff(&old_content, &content);
+    if let Err(e) = crate::diff::save_diff(&diff_db_path(), &path, &diff_text) {
+        eprintln!("[diff] Failed to save diff for {}: {}", path, e);
+    }
+
     fs::write(full_path, content)
         .await
         .map_err(|e| e.to_string())?;
@@ -167,9 +189,14 @@ pub async fn handle_sync_files(
         // 4. File Path Resolution and Duplicate Checks (I/O Processing)
         let full_path = save_path.join(file_path);
 
-        if fs::metadata(&full_path).await.is_ok() {
-            println!("[sync] File already exists, skipping: {}", file_path);
-            continue;
+        // 4a. Compute diff before writing (if file already exists)
+        if full_path.exists() {
+            let old_content = fs::read_to_string(&full_path).await.unwrap_or_default();
+            let new_content = String::from_utf8_lossy(&bytes).to_string();
+            let diff_text = crate::diff::compute_diff(&old_content, &new_content);
+            if let Err(e) = crate::diff::save_diff(&diff_db_path(), file_path, &diff_text) {
+                eprintln!("[diff] Failed to save diff for {}: {}", file_path, e);
+            }
         }
 
         // 5. Creating and Writing to Directories (I/O Processing)
