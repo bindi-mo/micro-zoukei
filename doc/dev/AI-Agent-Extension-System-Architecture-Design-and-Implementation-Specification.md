@@ -1,10 +1,10 @@
-# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.2.4
+# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.2.5
 
 ## 1. System Overview
 
 This system is a **Tauri-based desktop application** that adds an autonomous AI coding agent capability (Agent UI) to the web UI of the lightweight game development environment **"microStudio"** via DOM injection.
 
-Tauri (Rust) serves as the host process, receiving requests from the **Web UI** and using a **RAG (Retrieval-Augmented Generation) type search/inference engine implemented entirely in Rust** to gather context. It then sends prompts to an LLM and parses/executes file operation commands via **rig-core** (Function Calling).
+Tauri (Rust) serves as the host process, receiving requests from the **Web UI** and using a **RAG (Retrieval-Augmented Generation) type search/inference engine implemented entirely in Rust** to gather context. It then sends prompts to an LLM and parses/executes file operation commands via **rig** (Function Calling).
 
 Rather than modifying the original source code directly, the system performs temporary state changes on the backend **Workspace ($HOME/.micro-zoukei/workspace)**, and the frontend retrieves and displays the resulting diff (unified diff + diff2html). It then provides a secure workflow that persists and syncs changes to both the web files and local files only after explicit user approval.
 
@@ -37,7 +37,7 @@ Rather than modifying the original source code directly, the system performs tem
 │  │                                                              │
 │  ├─ Diff Management: Records diffs in SQLite                    │
 │  │                                                              │
-│  └─ Rig-Core Function Executor                                  │
+│  └─ Rig Function Executor                                       │
 │     ├─ LLM API calls (streaming support)                        │
 │     ├─ Function Calling (tool definition, parsing, execution)   │
 │     ├─ ReAct Loop control (sends tool results to LLM,           │
@@ -84,7 +84,7 @@ Rather than modifying the original source code directly, the system performs tem
 
 ### LAYER 2: Backend (Tauri / Rust)
 
-- **Technical Requirements**: Tauri v2, `tokio` (async runtime), `rig-core` (Function Calling support)
+- **Technical Requirements**: Tauri v2, `tokio` (async runtime), `rig` (Function Calling support)
 - **Key Responsibilities**:
   - Load application startup configuration (`config.yml`)
   - Route IPC requests from frontend
@@ -99,16 +99,16 @@ Rather than modifying the original source code directly, the system performs tem
     - Records file change diffs in a SQLite database managed by **rusqlite**
     - Provides functions to save, retrieve, and delete diff data
     - After user approval, executes sync to local files based on diff data
-  - **Rig-Core Function Executor**:
+  - **Rig Function Executor**:
     - Sends LLM API requests (streaming mode supported)
     - **Enables Function Calling only if the model supports it**
     - Tool definition, parsing, execution
     - ReAct loop control (sends tool execution results to LLM, determines completion)
     - Forwards streaming data to frontend in real time via `app_handle.emit()`
 
-### Rig-Core Function Executor (Detailed)
+### Rig Function Executor (Detailed)
 
-- **Technical Requirements**: `rig-core`, `reqwest` (HTTP communication), `serde_json` (JSON parsing)
+- **Technical Requirements**: `rig`, `reqwest` (HTTP communication), `serde_json` (JSON parsing)
 - **Key Responsibilities**:
   - **LLM API calls**:
     - Uses provider, model name, and API key defined in `config.yml`
@@ -159,12 +159,12 @@ Rather than modifying the original source code directly, the system performs tem
 3. **Index Construction**: Document loading → chunking → embedding API → storage in LanceDB
 4. **Prompt Sending**: Enter instruction in chat → sends to backend via reverse proxy using Tauri `fetch`
 5. **RAG Search**: Vectorize question → LanceDB similarity search → extract relevant context
-6. **LLM Inference (rig-core)**:
-   - rig-core sends streaming request to LLM API
+6. **LLM Inference (rig)**:
+   - rig sends streaming request to LLM API
    - Forwards received streaming data to frontend in real time via `app_handle.emit()`
    - Includes Function Calling tool definitions (only if model supports them)
-7. **Function Calling (rig-core)**:
-   - Receives tool calls from LLM → rig-core parses according to JSON schema
+7. **Function Calling (rig)**:
+   - Receives tool calls from LLM → rig parses according to JSON schema
    - Executes parsed commands on Workspace
    - Sends execution results back to LLM (ReAct Loop)
    - Continues loop until LLM determines completion
@@ -180,11 +180,11 @@ Rather than modifying the original source code directly, the system performs tem
 
 - `tokio` (async runtime)
 - `reqwest` (HTTP communication: embedding API & LLM API calls)
-- `serde` / `serde_json` / `serde_yaml` (JSON/YAML parsing)
+- `serde` / `serde_json` / `noyalib` (JSON/YAML parsing)
 - `lancedb` (local vector DB)
 - `walkdir` / `ignore` (directory traversal)
 - `notify` (file monitoring)
-- `rig-core` (Function Calling / tool call support, streaming processing)
+- `rig` (Function Calling / tool call support, streaming processing)
 - `rusqlite` (SQLite Rust binding: diff recording management)
 
 ### JavaScript Libraries
@@ -202,14 +202,14 @@ Rather than modifying the original source code directly, the system performs tem
 rag:
   provider: "openai"  # or "ollama", etc.
   model: "text-embedding-3-small"
-  api_key: "${OPENAI_API_KEY}"
+  api_key_env: "OPENAI_API_KEY"
   endpoint: "https://api.openai.com/v1/embeddings"  # Per-provider endpoint
 
 # Chat settings (for LLM)
 chat:
   provider: "openai"
   model: "gpt-4o"
-  api_key: "${OPENAI_API_KEY}"
+  api_key_env: "OPENAI_API_KEY"
   endpoint: "https://api.openai.com/v1/chat/completions"  # Per-provider endpoint
 
 # Workspace settings
@@ -236,18 +236,19 @@ lancedb:
 | v1.2.2 | 2026-09-13 | Changed streaming data transfer method to `app_handle.emit()` and Tauri Event, corrected Layer 1–4, other minor fixes |
 | v1.2.3 | 2026-09-13 | Specified crate for diff recording (rusqlite), added detailed Diff Management functionality description |
 | v1.2.4 | 2026-09-13 | Specified IPC communication method (fetch via reverse proxy), added `notify`, removed LanceDB memory usage descriptions, clarified Function Calling support conditions, added per-project workspace subdirectories, added per-provider API endpoint configuration in config.yml, unified notation (sqlite3 → SQLite), specified streaming performance considerations |
+| v1.2.5 | 2026-09-13 | Implemented all discrepancies between specification and Rust/Tauri implementation: `rig-core` → `rig` notation, `serde_yaml` → `noyalib`, `api_key` → `api_key_env`, real rusqlite diff recording, RAG integration in executor, per-provider endpoint support, project file monitoring with `notify`, diff recording in handlers |
 
 ---
 
-### Summary of Changes (v1.2.3 → v1.2.4)
+### Summary of Changes (v1.2.4 → v1.2.5)
 
 | Item | Change Description |
 |---|---|
-| **IPC Communication** | Specified that `fetch` via reverse proxy must be used since `invoke` is unavailable |
-| **File Monitoring** | Added `notify` crate |
-| **LanceDB** | Removed all descriptions regarding memory usage |
-| **Function Calling** | Clarified that support is conditional on the model supporting Tool Calling |
-| **Workspace** | Specified creation of per-project subdirectories |
-| **API Endpoints** | Added per-provider endpoint configuration in `config.yml` |
-| **Notation Unification** | "sqlite3" → "SQLite" (Rust binding remains "rusqlite") |
-| **Streaming** | Specified that performance should be considered during implementation (changed from v1.2.3's "known issue" to "implementation consideration") |
+| **Notation** | `rig-core` → `rig` (crate name) throughout all sections |
+| **Notation** | `serde_yaml` → `noyalib` (YAML parsing crate) |
+| **Notation** | `api_key` → `api_key_env` (environment variable name field) |
+| **Diff Recording** | Replaced stub with real rusqlite implementation (`init_db`, `save_diff`, `get_all_diffs`, `get_diffs_for_file`, `delete_diffs_for_file`, `delete_all_diffs`, `compute_diff`) |
+| **RAG Integration** | Added `rag::rag_query_answer()` call before sending prompt to LLM in executor |
+| **Endpoints** | Added per-provider endpoint support for OpenAI and OpenRouter via `Client::builder().base_url()` |
+| **File Monitoring** | Added `spawn_project_watcher()` in `lib.rs` using `notify` to detect `.txt`/`.md` changes and re-index LanceDB |
+| **Diff Recording in Handlers** | `handle_write_file()` and `handle_sync_files()` now compute and save diffs before writing |
