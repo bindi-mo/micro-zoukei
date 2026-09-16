@@ -122,8 +122,10 @@ pub async fn handle_log_message(message: String) -> Result<(), String> {
 }
 
 pub async fn handle_run_agent(prompt: String) -> Result<String, String> {
-    let config_state = crate::AppState::default();
-    let config = config_state.config_state.config.clone();
+    let config = {
+        let state = crate::APP_STATE.lock().unwrap();
+        state.config_state.config.clone()
+    };
     crate::agent::executor::run_agent(prompt, config).await
 }
 
@@ -138,10 +140,12 @@ pub async fn handle_sync_files(
     title: String,
     files: Vec<Value>,
 ) -> Result<serde_json::Value, String> {
-    let save_path = crate::WORKSPACE_PATH
-        .get()
-        .map(|path| path.join(&title))
-        .ok_or_else(|| "The workspace path has not been initialized.".to_string())?;
+    let project_path = {
+        let state = crate::APP_STATE.lock().unwrap();
+        state.config_state.config.projects.path.clone()
+    };
+    let save_path = std::path::PathBuf::from(&project_path).join(&title);
+    println!("{}", save_path.display());
 
     if files.is_empty() {
         println!("[sync] There are no files to sync.");
@@ -149,6 +153,16 @@ pub async fn handle_sync_files(
             "status": "error",
             "files_processed": 0
         }));
+    }
+
+    if !save_path.exists() {
+        if let Err(error) = fs::create_dir_all(&save_path).await {
+            return Err(format!(
+                "Failed to create save directory {}: {}",
+                save_path.display(),
+                error
+            ));
+        }
     }
 
     let mut files_processed = 0;

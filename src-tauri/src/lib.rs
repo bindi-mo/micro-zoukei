@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[cfg(debug_assertions)]
 use std::sync::mpsc::channel;
 use std::sync::OnceLock;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(debug_assertions)]
@@ -28,6 +28,8 @@ pub use config::{Config, ConfigState};
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
 pub static WORKSPACE_PATH: OnceLock<PathBuf> = OnceLock::new();
+pub static APP_STATE: LazyLock<Arc<Mutex<AppState>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(AppState::default())));
 
 #[derive(Default)]
 pub struct AppState {
@@ -248,11 +250,9 @@ fn webview_cache_dir(app_handle: &tauri::AppHandle) -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app_state = Arc::new(Mutex::new(AppState::default()));
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(app_state.clone())
+        .manage(APP_STATE.clone())
         .setup(move |app| {
             // create workspace folder
             match get_or_create_workspace(app) {
@@ -266,7 +266,7 @@ pub fn run() {
                         .resolve("template.config.yml", BaseDirectory::Resource)?;
 
                     // Initialize config state
-                    let mut state = app_state.lock().unwrap();
+                    let mut state = APP_STATE.lock().unwrap();
                     *state = AppState::new(workspace_path.clone(), template_yaml_path)?;
                 }
                 Err(e) => {
@@ -282,7 +282,7 @@ pub fn run() {
                 Ok(p) => {
                     port = p;
                     println!("[tauri] Proxy started on port: {}", p);
-                    let mut state = app_state.lock().unwrap();
+                    let mut state = APP_STATE.lock().unwrap();
                     state.proxy_port = Some(p);
                     // Clone port for use in read_injected_script (it doesn't implement Copy)
                     let port_clone = p;
