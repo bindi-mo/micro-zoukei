@@ -256,7 +256,7 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
         Ok(p) if p != 0 => {
             migrate_local_storage(&cache_dir, p);
             Ok(p)
-        },
+        }
         Ok(_) | Err(_) => Err("proxy failed to start".into()),
     }
 }
