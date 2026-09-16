@@ -15,7 +15,7 @@ pub struct Config {
 pub struct RagConfig {
     pub provider: String,
     pub model: String,
-    pub api_key_env: String,
+    pub api_key_env: Option<String>,
     pub endpoint: String,
 }
 
@@ -23,7 +23,7 @@ pub struct RagConfig {
 pub struct ChatConfig {
     pub provider: String,
     pub model: String,
-    pub api_key_env: String,
+    pub api_key_env: Option<String>,
     pub endpoint: String,
 }
 

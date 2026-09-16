@@ -65,7 +65,10 @@ pub async fn run_agent(prompt: String, config: crate::config::Config) -> Result<
 
     let agent = match provider.as_str() {
         "openai" => {
-            let api_key = resolve_api_key(&config.chat.api_key_env, "OPENAI_API_KEY")?;
+            let api_key = resolve_api_key(
+                config.chat.api_key_env.as_deref().unwrap_or(""),
+                "OPENAI_API_KEY",
+            )?;
             let client = if config.chat.endpoint.is_empty() {
                 rig::providers::openai::Client::new(&api_key)
                     .map_err(|e| format!("Failed to create OpenAI client: {}", e))?
@@ -105,7 +108,10 @@ pub async fn run_agent(prompt: String, config: crate::config::Config) -> Result<
                 .build()
         }
         "openrouter" => {
-            let api_key = resolve_api_key(&config.chat.api_key_env, "OPENROUTER_API_KEY")?;
+            let api_key = resolve_api_key(
+                config.chat.api_key_env.as_deref().unwrap_or(""),
+                "OPENROUTER_API_KEY",
+            )?;
             let client = if config.chat.endpoint.is_empty() {
                 rig::providers::openrouter::Client::new(&api_key)
                     .map_err(|e| format!("Failed to create OpenRouter client: {}", e))?

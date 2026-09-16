@@ -221,6 +221,8 @@ lancedb:
   path: "$HOME/.micro-zoukei/lancedb"
 ```
 
+Note: The `api_key_env` field can be omitted when not required by the LLM provider (e.g., for local Ollama instances).
+
 ---
 
 ## 8. Version History

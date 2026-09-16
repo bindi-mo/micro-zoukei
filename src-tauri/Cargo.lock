@@ -5149,6 +5149,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tempfile",
  "tokio",
  "tokio-tungstenite 0.21.0",
  "url",
