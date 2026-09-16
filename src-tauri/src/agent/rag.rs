@@ -17,6 +17,31 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use walkdir::WalkDir;
 
+// Helper function to handle RAG re-indexing
+async fn handle_rag_reindex(
+    app_handle: tauri::AppHandle,
+    config: &crate::config::Config,
+    knowledge_path: &str,
+) {
+    let db_path = config.lancedb.path.clone();
+    match crate::agent::rag::rag_inject_documents(
+        &config.rag.provider,
+        &config.rag.model,
+        knowledge_path,
+        &db_path,
+    )
+    .await
+    {
+        Ok(count) => {
+            println!("[tauri] RAG re-index complete: {} documents", count);
+            let _ = app_handle.emit("rag-reindexed", count);
+        }
+        Err(e) => {
+            eprintln!("[tauri] RAG re-index failed: {}", e);
+        }
+    }
+}
+
 pub enum SupportedClient {
     OpenAi(openai::Client),
     Ollama(ollama::Client),
@@ -269,28 +294,15 @@ pub fn spawn_knowledge_watcher(
 
                     // Spawn async re-indexing task
                     let app_handle_cloned = app_handle.clone();
-                    let config_state_cloned = config_state.clone();
-                    let knowledge_path_cloned = knowledge_path.clone();
+                    let config = config_state.config.clone();
+                    let knowledge_path = knowledge_path.to_string_lossy().into_owned();
                     tokio::spawn(async move {
-                        let config = &config_state_cloned.config;
-                        let path = PathBuf::from(config.lancedb.path.clone());
-                        let db_path = path.join("lancedb");
-                        match crate::agent::rag::rag_inject_documents(
-                            &config.rag.provider,
-                            &config.rag.model,
-                            &knowledge_path_cloned.to_string_lossy(),
-                            &db_path.to_string_lossy(),
+                        crate::agent::rag::handle_rag_reindex(
+                            app_handle_cloned,
+                            &config,
+                            &knowledge_path,
                         )
-                        .await
-                        {
-                            Ok(count) => {
-                                println!("[tauri] RAG re-index complete: {} documents", count);
-                                let _ = app_handle_cloned.emit("rag-reindexed", count);
-                            }
-                            Err(e) => {
-                                eprintln!("[tauri] RAG re-index failed: {}", e);
-                            }
-                        }
+                        .await;
                     });
                 }
                 Err(e) => eprintln!("[tauri] project watcher error: {:?}", e),
