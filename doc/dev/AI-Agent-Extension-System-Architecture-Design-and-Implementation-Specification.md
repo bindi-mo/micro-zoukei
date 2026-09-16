@@ -106,6 +106,16 @@ Rather than modifying the original source code directly, the system performs tem
     - ReAct loop control (sends tool execution results to LLM, determines completion)
     - Forwards streaming data to frontend in real time via `app_handle.emit()`
 
+#### Configuration State and Ownership
+
+`ConfigState` is the only application configuration aggregate. It directly
+contains the `rag`, `chat`, `projects`, and `lancedb` fields, preserving the
+existing top-level YAML schema without a nested `Config` wrapper. The state is
+loaded and path-normalized once at application startup, then shared as an
+immutable `Arc<ConfigState>` with Tauri commands and background workers. This
+keeps configuration reads lock-free while allowing the knowledge watcher to
+clone the lightweight `Arc` for each re-indexing task.
+
 ### Rig Function Executor (Detailed)
 
 - **Technical Requirements**: `rig`, `reqwest` (HTTP communication), `serde_json` (JSON parsing)

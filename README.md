@@ -4,11 +4,19 @@ MicroZoukei is a tool that bridges the workspace with `microstudio.dev` through 
 
 ## Architecture Overview
 
-- **Config**: `template.config.yml` → `$HOME/.micro-zoukei/config.[yml|yaml]`
+- **Config**: `ConfigState` loads `template.config.yml` → `$HOME/.micro-zoukei/config.[yml|yaml]`
 - **Agent**: `src-tauri/src/agent/` (rag, executor, tools)
 - **Diff**: `src-tauri/src/diff.rs` + SQLite (`rusqlite`)
 - **Tests**: `src-tauri/tests/`
 - **Frontend**: `diff2html` for visual diff
+
+### Configuration State
+
+`ConfigState` is the sole configuration aggregate. It directly owns the `rag`,
+`chat`, `projects`, and `lancedb` sections from the existing YAML schema, without
+a nested `Config` wrapper. Tauri stores an immutable `Arc<ConfigState>` at startup
+and shares it with commands and background workers; path normalization is applied
+once during loading.
 
 ### 1. Proxy Server (`proxy.rs`)
 The proxy acts as the central gateway for all web requests:

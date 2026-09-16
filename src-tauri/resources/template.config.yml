@@ -6,7 +6,7 @@ chat:
   provider: ollama
   model: gemma4:E4B-it-qat-Q4_K_M
   endpoint: "http://localhost:11434/v1"
-workspace:
-  path: "$HOME/.micro-zoukei/workspace"
+projects:
+  path: "$HOME/.micro-zoukei/projects"
 lancedb:
   path: "$HOME/.micro-zoukei/lancedb"
