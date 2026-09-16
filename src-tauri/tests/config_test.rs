@@ -1,13 +1,13 @@
 use micro_studio_agent_lib::config::{
-    load_config, ChatConfig, Config, ConfigState, LanceConfig, ProjectsConfig, RagConfig,
+    load_config, ChatConfig, ConfigState, LanceConfig, ProjectsConfig, RagConfig,
 };
 use std::fs;
 use tempfile::TempDir;
 
-/// `Config::default()` should produce a config with all string fields empty.
+/// `ConfigState::default()` should produce a config with all string fields empty.
 #[test]
 fn config_defaults_are_empty() {
-    let config = Config::default();
+    let config = ConfigState::default();
     assert_eq!(config.rag.provider, "");
     assert_eq!(config.rag.model, "");
     assert!(config.rag.api_key_env.is_none());
@@ -20,10 +20,10 @@ fn config_defaults_are_empty() {
     assert_eq!(config.lancedb.path, "");
 }
 
-/// `Config` should implement `Clone` so it can be shared across threads.
+/// `ConfigState` should implement `Clone` so it can be shared across threads.
 #[test]
 fn config_clone_preserves_values() {
-    let original = Config {
+    let original = ConfigState {
         rag: RagConfig {
             provider: "openai".to_string(),
             model: "text-embedding-ada-002".to_string(),
@@ -83,19 +83,19 @@ lancedb:
     )
     .expect("failed to write config.yml");
 
-    let config =
+    let state =
         load_config(temp_dir.path().to_path_buf()).expect("failed to load config from temp dir");
 
-    assert_eq!(config.rag.provider, "openai");
-    assert_eq!(config.rag.model, "text-embedding-ada-002");
-    assert_eq!(config.rag.api_key_env, Some("OPENAI_API_KEY".to_string()));
-    assert_eq!(config.rag.endpoint, "https://api.openai.com");
-    assert_eq!(config.chat.provider, "openai");
-    assert_eq!(config.chat.model, "gpt-4o");
-    assert_eq!(config.chat.api_key_env, Some("OPENAI_API_KEY".to_string()));
-    assert_eq!(config.chat.endpoint, "");
-    assert_eq!(config.projects.path, "/home/user/projects");
-    assert_eq!(config.lancedb.path, "/home/user/lancedb");
+    assert_eq!(state.rag.provider, "openai");
+    assert_eq!(state.rag.model, "text-embedding-ada-002");
+    assert_eq!(state.rag.api_key_env, Some("OPENAI_API_KEY".to_string()));
+    assert_eq!(state.rag.endpoint, "https://api.openai.com");
+    assert_eq!(state.chat.provider, "openai");
+    assert_eq!(state.chat.model, "gpt-4o");
+    assert_eq!(state.chat.api_key_env, Some("OPENAI_API_KEY".to_string()));
+    assert_eq!(state.chat.endpoint, "");
+    assert_eq!(state.projects.path, "/home/user/projects");
+    assert_eq!(state.lancedb.path, "/home/user/lancedb");
 }
 
 /// `load_config` should fall back to `config.yaml` when `config.yml` is absent.
@@ -124,16 +124,19 @@ lancedb:
     )
     .expect("failed to write config.yaml");
 
-    let config =
+    let state =
         load_config(temp_dir.path().to_path_buf()).expect("failed to load config from temp dir");
 
-    assert_eq!(config.rag.provider, "ollama");
-    assert_eq!(config.rag.model, "nomic-embed-text");
-    assert_eq!(config.rag.api_key_env, Some("".to_string()));
-    assert_eq!(config.rag.endpoint, "http://localhost:11434");
-    assert_eq!(config.chat.provider, "ollama");
-    assert_eq!(config.chat.model, "llama3");
-    assert_eq!(config.chat.api_key_env, Some("".to_string()));
+    assert_eq!(state.rag.provider, "ollama");
+    assert_eq!(state.rag.model, "nomic-embed-text");
+    assert_eq!(state.rag.api_key_env, Some("".to_string()));
+    assert_eq!(state.rag.endpoint, "http://localhost:11434");
+    assert_eq!(state.chat.provider, "ollama");
+    assert_eq!(state.chat.model, "llama3");
+    assert_eq!(state.chat.api_key_env, Some("".to_string()));
+    assert_eq!(state.chat.endpoint, "http://localhost:11434");
+    assert_eq!(state.projects.path, "/home/user/projects");
+    assert_eq!(state.lancedb.path, "/home/user/lancedb");
 }
 
 /// `load_config` should return `Err` when no config file exists in the directory.
@@ -147,7 +150,7 @@ fn config_load_missing_returns_error() {
     );
 }
 
-/// `ConfigState::load` should wrap a successfully loaded `Config`.
+/// `ConfigState::load` should load all configuration sections directly.
 #[test]
 fn config_state_load_succeeds() {
     let temp_dir = TempDir::new().expect("failed to create temp dir");
@@ -176,15 +179,17 @@ lancedb:
     let state =
         ConfigState::load(temp_dir.path().to_path_buf()).expect("failed to load ConfigState");
 
-    assert_eq!(state.config.rag.provider, "openrouter");
-    assert_eq!(state.config.rag.model, "text-embedding-ada-002");
+    assert_eq!(state.rag.provider, "openrouter");
+    assert_eq!(state.rag.model, "text-embedding-ada-002");
     assert_eq!(
-        state.config.rag.api_key_env,
+        state.rag.api_key_env,
         Some("OPENROUTER_API_KEY".to_string())
     );
-    assert_eq!(state.config.chat.model, "gpt-4o");
+    assert_eq!(state.chat.model, "gpt-4o");
     assert_eq!(
-        state.config.chat.api_key_env,
+        state.chat.api_key_env,
         Some("OPENROUTER_API_KEY".to_string())
     );
+    assert_eq!(state.projects.path, "/home/user/projects");
+    assert_eq!(state.lancedb.path, "/home/user/lancedb");
 }

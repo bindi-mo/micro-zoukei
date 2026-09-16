@@ -20,7 +20,7 @@ use walkdir::WalkDir;
 // Helper function to handle RAG re-indexing
 async fn handle_rag_reindex(
     app_handle: tauri::AppHandle,
-    config: &crate::config::Config,
+    config: &crate::config::ConfigState,
     knowledge_path: &str,
 ) {
     let db_path = config.lancedb.path.clone();
@@ -294,12 +294,12 @@ pub fn spawn_knowledge_watcher(
 
                     // Spawn async re-indexing task
                     let app_handle_cloned = app_handle.clone();
-                    let config = config_state.config.clone();
+                    let config = config_state.clone();
                     let knowledge_path = knowledge_path.to_string_lossy().into_owned();
                     tokio::spawn(async move {
                         crate::agent::rag::handle_rag_reindex(
                             app_handle_cloned,
-                            &config,
+                            config.as_ref(),
                             &knowledge_path,
                         )
                         .await;

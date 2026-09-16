@@ -122,11 +122,11 @@ pub async fn handle_log_message(message: String) -> Result<(), String> {
 }
 
 pub async fn handle_run_agent(prompt: String) -> Result<String, String> {
-    let config = {
+    let config_state = {
         let state = crate::APP_STATE.lock().unwrap();
-        state.config_state.config.clone()
+        state.config_state.clone()
     };
-    crate::agent::executor::run_agent(prompt, config).await
+    crate::agent::executor::run_agent(prompt, config_state.as_ref()).await
 }
 
 pub async fn handle_health() -> Result<serde_json::Value, String> {
@@ -142,7 +142,7 @@ pub async fn handle_sync_files(
 ) -> Result<serde_json::Value, String> {
     let project_path = {
         let state = crate::APP_STATE.lock().unwrap();
-        state.config_state.config.projects.path.clone()
+        state.config_state.projects.path.clone()
     };
     let save_path = std::path::PathBuf::from(&project_path).join(&title);
     println!("{}", save_path.display());

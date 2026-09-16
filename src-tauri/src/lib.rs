@@ -23,7 +23,7 @@ pub mod handlers;
 pub mod network;
 pub mod proxy;
 
-pub use config::{Config, ConfigState};
+pub use config::ConfigState;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
