@@ -24,9 +24,7 @@ pub async fn run_agent(
     prompt: String,
     config: &crate::config::ConfigState,
 ) -> Result<String, String> {
-    // 1. Use the provided configuration (loaded once at startup)
-
-    // 2. RAG: retrieve relevant context from LanceDB if configured
+    // 1. RAG: retrieve relevant context from LanceDB if configured
     let rag_context = if !config.rag.provider.is_empty()
         && !config.rag.model.is_empty()
         && !config.lancedb.path.is_empty()
@@ -53,7 +51,7 @@ pub async fn run_agent(
         None
     };
 
-    // 3. Build the full prompt with RAG context
+    // 2. Build the full prompt with RAG context
     let full_prompt = match &rag_context {
         Some(ctx) => format!(
             "Use the following context to help answer the user's request:\n\n--- Context ---\n{}\n--- End Context ---\n\nUser request: {}",
@@ -62,7 +60,7 @@ pub async fn run_agent(
         None => prompt.clone(),
     };
 
-    // 4. Create the LLM client based on the configured provider
+    // 3. Create the LLM client based on the configured provider
     let provider = config.chat.provider.to_lowercase();
     let model_name = &config.chat.model;
 
@@ -136,7 +134,7 @@ pub async fn run_agent(
         _ => return Err(format!("Unsupported provider: {}", provider)),
     };
 
-    // 5. Execute the prompt with the agent
+    // 4. Execute the prompt with the agent
     let response = agent
         .prompt(&full_prompt)
         .await
