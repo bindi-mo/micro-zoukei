@@ -43,7 +43,6 @@ pub async fn mzd_run_agent(prompt: String) -> Result<String, String> {
     crate::handlers::handle_run_agent(prompt).await
 }
 
-
 // Dispatcher function - handles incoming HTTP requests from the frontend
 pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
     let request_id = uuid::Uuid::new_v4().to_string();
