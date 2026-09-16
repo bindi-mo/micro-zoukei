@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(debug_assertions)]
 use notify::{recommended_watcher, RecursiveMode, Watcher};
+use tauri::path::BaseDirectory;
 use tauri::window::Color;
 use tauri::Manager;
 use tauri::{Url, WebviewWindowBuilder};
@@ -36,7 +37,10 @@ pub struct AppState {
 
 impl AppState {
     /// Initialize AppState with config loaded from workspace path
-    pub fn new(workspace_path: PathBuf) -> Result<Self, String> {
+    pub fn new(workspace_path: PathBuf, template_path: PathBuf) -> Result<Self, String> {
+        // Ensure config.yml exists by copying from template.config.yml if needed
+        let _ = config::ensure_config_exists(workspace_path.clone(), template_path.clone());
+
         let config_state = std::sync::Arc::new(config::ConfigState::load(workspace_path)?);
         Ok(AppState {
             proxy_port: None,
@@ -256,9 +260,14 @@ pub fn run() {
                     println!("Workspace path: {:?}", workspace_path);
                     // You can perform further operations using the path here
                     let _ = WORKSPACE_PATH.set(workspace_path.clone());
+
+                    let template_yaml_path = app
+                        .path()
+                        .resolve("template.config.yml", BaseDirectory::Resource)?;
+
                     // Initialize config state
                     let mut state = app_state.lock().unwrap();
-                    *state = AppState::new(workspace_path.clone())?;
+                    *state = AppState::new(workspace_path.clone(), template_yaml_path)?;
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);

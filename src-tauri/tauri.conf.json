@@ -22,6 +22,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/template.config.yml",
+      "resources/knowledge_base/*.md"
     ]
   }
 }
