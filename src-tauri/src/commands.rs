@@ -40,7 +40,7 @@ pub async fn mzd_health() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn mzd_run_agent(prompt: String) -> Result<String, String> {
-    crate::agent::executor::run_agent(prompt).await
+    crate::handlers::handle_run_agent(prompt).await
 }
 
 
@@ -131,7 +131,7 @@ pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
         ),
         "mzd_health" => map_error(crate::handlers::handle_health().await),
         "mzd_run_agent" => map_error(
-            crate::commands::mzd_run_agent(
+            crate::handlers::handle_run_agent(
                 payload
                     .args
                     .get("prompt")

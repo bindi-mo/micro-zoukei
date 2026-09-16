@@ -211,7 +211,11 @@ pub async fn rag_query_answer(
 /// When source files (.txt, .md) are created, modified, or removed,
 /// the RAG index is automatically re-indexed via `agent::rag::rag_inject_documents`.
 #[cfg(debug_assertions)]
-pub fn spawn_knowledge_watcher(app_handle: tauri::AppHandle, knowledge_path: PathBuf) {
+pub fn spawn_knowledge_watcher(
+    app_handle: tauri::AppHandle,
+    knowledge_path: PathBuf,
+    config_state: std::sync::Arc<crate::config::ConfigState>,
+) {
     std::thread::spawn(move || {
         let (tx, rx) = channel();
 
@@ -265,20 +269,16 @@ pub fn spawn_knowledge_watcher(app_handle: tauri::AppHandle, knowledge_path: Pat
 
                     // Spawn async re-indexing task
                     let app_handle_cloned = app_handle.clone();
-                    let ws_path = knowledge_path.clone();
+                    let config_state_cloned = config_state.clone();
+                    let knowledge_path_cloned = knowledge_path.clone();
                     tokio::spawn(async move {
-                        let db_path = ws_path.join("lancedb");
-                        let config = match crate::config::load_default_config() {
-                            Ok(c) => c,
-                            Err(e) => {
-                                eprintln!("[tauri] failed to load config for re-index: {}", e);
-                                return;
-                            }
-                        };
+                        let config = &config_state_cloned.config;
+                        let path = PathBuf::from(config.lancedb.path.clone());
+                        let db_path = path.join("lancedb");
                         match crate::agent::rag::rag_inject_documents(
                             &config.rag.provider,
                             &config.rag.model,
-                            &ws_path.to_string_lossy(),
+                            &knowledge_path_cloned.to_string_lossy(),
                             &db_path.to_string_lossy(),
                         )
                         .await

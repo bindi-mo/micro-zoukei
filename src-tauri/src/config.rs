@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Config {
     pub rag: RagConfig,
     pub chat: ChatConfig,
@@ -11,7 +11,7 @@ pub struct Config {
     pub lancedb: LanceConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct RagConfig {
     pub provider: String,
     pub model: String,
@@ -19,7 +19,7 @@ pub struct RagConfig {
     pub endpoint: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ChatConfig {
     pub provider: String,
     pub model: String,
@@ -27,28 +27,39 @@ pub struct ChatConfig {
     pub endpoint: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct WorkspaceConfig {
     pub path: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct LanceConfig {
     pub path: String,
 }
 
-/// Load the application configuration from config.yaml or config.yml.
-/// 1. Functions for the default workspace that do not require arguments
-pub fn load_default_config() -> Result<Config, String> {
-    let default_path = crate::WORKSPACE_PATH
-        .get()
-        .ok_or_else(|| "The workspace path has not been initialized.".to_string())?
-        .clone();
-
-    load_config(default_path)
+/// Wrapper around `Config` that is shared via `Arc<ConfigState>` across
+/// Tauri commands and background threads (e.g. the knowledge watcher).
+///
+/// The config is loaded once at application startup and treated as
+/// immutable thereafter, so no locking is required.
+#[derive(Default)]
+pub struct ConfigState {
+    pub config: Config,
 }
 
-/// 2. Specific processing functions that require a pass
+impl ConfigState {
+    /// Load a `ConfigState` from the given workspace directory.
+    pub fn load(path: PathBuf) -> Result<Self, String> {
+        Ok(ConfigState {
+            config: load_config(path)?,
+        })
+    }
+}
+
+/// Load the application configuration from `config.yml` or `config.yaml`.
+///
+/// Tries `config.yml` first, then falls back to `config.yaml` for backward
+/// compatibility. Returns `Err` if the file cannot be read or parsed.
 pub fn load_config(path: PathBuf) -> Result<Config, String> {
     // Try config.yml first, then fall back to config.yaml for backward compatibility.
     let config_path = if path.join("config.yml").exists() {

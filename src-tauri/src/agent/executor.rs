@@ -20,9 +20,8 @@ fn resolve_api_key(config_key: &str, default_env: &str) -> Result<String, String
 /// When RAG is configured (provider + model + lancedb path are all set),
 /// relevant context is retrieved from the LanceDB index and prepended
 /// to the prompt before it is sent to the LLM.
-pub async fn run_agent(prompt: String) -> Result<String, String> {
-    // 1. Load configuration
-    let config = crate::config::load_default_config()?;
+pub async fn run_agent(prompt: String, config: crate::config::Config) -> Result<String, String> {
+    // 1. Use the provided configuration (loaded once at startup)
 
     // 2. RAG: retrieve relevant context from LanceDB if configured
     let rag_context = if !config.rag.provider.is_empty()

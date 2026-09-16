@@ -121,6 +121,12 @@ pub async fn handle_log_message(message: String) -> Result<(), String> {
     Ok(())
 }
 
+pub async fn handle_run_agent(prompt: String) -> Result<String, String> {
+    let config_state = crate::AppState::default();
+    let config = config_state.config_state.config.clone();
+    crate::agent::executor::run_agent(prompt, config).await
+}
+
 pub async fn handle_health() -> Result<serde_json::Value, String> {
     Ok(json!({
         "status": "ok",

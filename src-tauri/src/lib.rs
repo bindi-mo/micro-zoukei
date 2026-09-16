@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(debug_assertions)]
-use notify::{recommended_watcher, Config, RecursiveMode, Watcher};
+use notify::{recommended_watcher, RecursiveMode, Watcher};
 use tauri::window::Color;
 use tauri::Manager;
 use tauri::{Url, WebviewWindowBuilder};
@@ -22,6 +22,8 @@ pub mod handlers;
 pub mod network;
 pub mod proxy;
 
+pub use config::{Config, ConfigState};
+
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
 pub static WORKSPACE_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -29,6 +31,18 @@ pub static WORKSPACE_PATH: OnceLock<PathBuf> = OnceLock::new();
 #[derive(Default)]
 pub struct AppState {
     proxy_port: Option<u16>,
+    config_state: std::sync::Arc<config::ConfigState>,
+}
+
+impl AppState {
+    /// Initialize AppState with config loaded from workspace path
+    pub fn new(workspace_path: PathBuf) -> Result<Self, String> {
+        let config_state = std::sync::Arc::new(config::ConfigState::load(workspace_path)?);
+        Ok(AppState {
+            proxy_port: None,
+            config_state,
+        })
+    }
 }
 
 /// Gets the workspace path (`~/.productName`) and creates the directory
@@ -173,7 +187,7 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
             }
         };
 
-        if let Err(err) = watcher.configure(Config::default()) {
+        if let Err(err) = watcher.configure(notify::Config::default()) {
             eprintln!("[tauri] failed to configure injected.js watcher: {:?}", err);
         }
 
@@ -241,7 +255,10 @@ pub fn run() {
                 Ok(workspace_path) => {
                     println!("Workspace path: {:?}", workspace_path);
                     // You can perform further operations using the path here
-                    let _ = WORKSPACE_PATH.set(workspace_path);
+                    let _ = WORKSPACE_PATH.set(workspace_path.clone());
+                    // Initialize config state
+                    let mut state = app_state.lock().unwrap();
+                    *state = AppState::new(workspace_path.clone())?;
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);
