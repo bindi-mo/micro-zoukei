@@ -238,7 +238,7 @@ pub async fn rag_query_answer(
 #[cfg(debug_assertions)]
 pub fn spawn_knowledge_watcher(
     app_handle: tauri::AppHandle,
-    knowledge_path: PathBuf,
+    path: PathBuf,
     config_state: std::sync::Arc<crate::config::ConfigState>,
 ) {
     std::thread::spawn(move || {
@@ -258,12 +258,12 @@ pub fn spawn_knowledge_watcher(
             eprintln!("[tauri] failed to configure project watcher: {:?}", e);
         }
 
-        if let Err(e) = watcher.watch(&knowledge_path, RecursiveMode::Recursive) {
+        if let Err(e) = watcher.watch(&path, RecursiveMode::Recursive) {
             eprintln!("[tauri] project watcher failed to watch path: {:?}", e);
             return;
         }
 
-        println!("[tauri] project watcher started on {:?}", knowledge_path);
+        println!("[tauri] project watcher started on {:?}", path);
 
         // Debounce: ignore events within 2 seconds of the last re-index
         let mut last_reindex: u64 = 0;
@@ -295,7 +295,7 @@ pub fn spawn_knowledge_watcher(
                     // Spawn async re-indexing task
                     let app_handle_cloned = app_handle.clone();
                     let config = config_state.clone();
-                    let knowledge_path = knowledge_path.to_string_lossy().into_owned();
+                    let knowledge_path = path.to_string_lossy().into_owned();
                     tokio::spawn(async move {
                         crate::agent::rag::handle_rag_reindex(
                             app_handle_cloned,
