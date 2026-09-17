@@ -44,7 +44,6 @@ pub fn map_error<T: serde::Serialize>(source: Result<T, String>) -> CommandRespo
 }
 
 use crate::config::LogLevel;
-use crate::logger::LogModule;
 
 // Helper to resolve paths
 pub fn resolve_path(path: &str) -> Result<PathBuf, String> {
@@ -101,15 +100,7 @@ pub async fn handle_write_file(path: String, content: String) -> Result<bool, St
 
     // Save diff to rusqlite
     let diff_text = crate::diff::compute_diff(&old_content, &content);
-    if let Err(e) = crate::diff::save_diff(&diff_db_path(), &path, &diff_text) {
-        crate::log!(
-            LogModule::Diff,
-            LogLevel::Error,
-            "Failed to save diff for {}: {}",
-            path,
-            e
-        );
-    }
+    let _ = crate::diff::save_diff_with_log(&diff_db_path(), &path, &diff_text);
 
     fs::write(full_path, content)
         .await
@@ -133,7 +124,7 @@ pub async fn handle_log_message(level: String, message: String) -> Result<(), St
         _ => return Err(format!("Invalid log level: {}", level)),
     };
 
-    crate::log!(LogModule::Frontend, level, "{}", message);
+    crate::frontend_log!(level, "{}", message);
     Ok(())
 }
 
@@ -161,19 +152,10 @@ pub async fn handle_sync_files(
         state.config_state.projects.path.clone()
     };
     let save_path = std::path::PathBuf::from(&project_path).join(&title);
-    crate::log!(
-        LogModule::Commands,
-        LogLevel::Info,
-        "Sync destination: {}",
-        save_path.display()
-    );
+    crate::log!(LogLevel::Info, "Sync destination: {}", save_path.display());
 
     if files.is_empty() {
-        crate::log!(
-            LogModule::Commands,
-            LogLevel::Info,
-            "There are no files to sync"
-        );
+        crate::log!(LogLevel::Info, "There are no files to sync");
         return Ok(json!({
             "status": "error",
             "files_processed": 0
@@ -197,11 +179,7 @@ pub async fn handle_sync_files(
         let file_path = match file_obj.get("file").and_then(|v| v.as_str()) {
             Some(path) if !path.is_empty() => path,
             _ => {
-                crate::log!(
-                    LogModule::Commands,
-                    LogLevel::Warn,
-                    "Invalid or missing 'file' key"
-                );
+                crate::log!(LogLevel::Warn, "Invalid or missing 'file' key");
                 continue;
             }
         };
@@ -210,12 +188,7 @@ pub async fn handle_sync_files(
         let content_str = match file_obj.get("content").and_then(|v| v.as_str()) {
             Some(c) => c,
             None => {
-                crate::log!(
-                    LogModule::Commands,
-                    LogLevel::Warn,
-                    "No content found for file: {}",
-                    file_path
-                );
+                crate::log!(LogLevel::Warn, "No content found for file: {}", file_path);
                 continue;
             }
         };
@@ -232,7 +205,6 @@ pub async fn handle_sync_files(
                 Ok(decoded) => decoded,
                 Err(e) => {
                     crate::log!(
-                        LogModule::Commands,
                         LogLevel::Warn,
                         "Failed to decode base64 for {}: {}",
                         file_path,
@@ -254,22 +226,13 @@ pub async fn handle_sync_files(
             let old_content = fs::read_to_string(&full_path).await.unwrap_or_default();
             let new_content = String::from_utf8_lossy(&bytes).to_string();
             let diff_text = crate::diff::compute_diff(&old_content, &new_content);
-            if let Err(e) = crate::diff::save_diff(&diff_db_path(), file_path, &diff_text) {
-                crate::log!(
-                    LogModule::Diff,
-                    LogLevel::Error,
-                    "Failed to save diff for {}: {}",
-                    file_path,
-                    e
-                );
-            }
+            let _ = crate::diff::save_diff_with_log(&diff_db_path(), file_path, &diff_text);
         }
 
         // 5. Creating and Writing to Directories (I/O Processing)
         if let Some(parent) = full_path.parent() {
             if let Err(e) = fs::create_dir_all(parent).await {
                 crate::log!(
-                    LogModule::Commands,
                     LogLevel::Error,
                     "Failed to create parent directory for {}: {}",
                     file_path,
@@ -282,20 +245,9 @@ pub async fn handle_sync_files(
         match fs::write(&full_path, &bytes).await {
             Ok(_) => {
                 files_processed += 1;
-                crate::log!(
-                    LogModule::Commands,
-                    LogLevel::Info,
-                    "Wrote file: {}",
-                    full_path.display()
-                );
+                crate::log!(LogLevel::Info, "Wrote file: {}", full_path.display());
             }
-            Err(e) => crate::log!(
-                LogModule::Commands,
-                LogLevel::Error,
-                "Failed to write file {}: {}",
-                file_path,
-                e
-            ),
+            Err(e) => crate::log!(LogLevel::Error, "Failed to write file {}: {}", file_path, e),
         }
     }
 

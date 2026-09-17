@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 static LOGGER: OnceLock<Arc<LoggerConfig>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogModule {
+enum LogModule {
     Frontend,
     Tauri,
     Proxy,
@@ -15,7 +15,7 @@ pub enum LogModule {
 }
 
 impl LogModule {
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Frontend => "FRONTEND",
             Self::Tauri => "TAURI",
@@ -50,11 +50,46 @@ fn configured_level(module: LogModule) -> LogLevel {
     }
 }
 
-pub fn is_enabled(module: LogModule, level: LogLevel) -> bool {
+fn module_from_path(module_path: &str) -> LogModule {
+    let components: Vec<_> = module_path.split("::").collect();
+
+    if components.iter().any(|component| *component == "proxy") {
+        LogModule::Proxy
+    } else if components.iter().any(|component| *component == "agent") {
+        LogModule::Agent
+    } else if components
+        .iter()
+        .any(|component| matches!(*component, "commands" | "handlers"))
+    {
+        LogModule::Commands
+    } else if components.iter().any(|component| *component == "diff") {
+        LogModule::Diff
+    } else {
+        LogModule::Tauri
+    }
+}
+
+pub(crate) fn is_enabled_for_path(module_path: &str, level: LogLevel) -> bool {
+    is_enabled(module_from_path(module_path), level)
+}
+
+pub(crate) fn emit_for_path(module_path: &str, level: LogLevel, message: Arguments<'_>) {
+    emit(module_from_path(module_path), level, message);
+}
+
+pub(crate) fn is_frontend_enabled(level: LogLevel) -> bool {
+    is_enabled(LogModule::Frontend, level)
+}
+
+pub(crate) fn emit_frontend(level: LogLevel, message: Arguments<'_>) {
+    emit(LogModule::Frontend, level, message);
+}
+
+fn is_enabled(module: LogModule, level: LogLevel) -> bool {
     level.is_enabled(configured_level(module))
 }
 
-pub fn emit(module: LogModule, level: LogLevel, message: Arguments<'_>) {
+fn emit(module: LogModule, level: LogLevel, message: Arguments<'_>) {
     if !is_enabled(module, level) {
         return;
     }
@@ -68,109 +103,30 @@ pub fn emit(module: LogModule, level: LogLevel, message: Arguments<'_>) {
     }
 }
 
-/// Emit a log only when its module and level are enabled.
+/// Emit a log using the calling Rust module's path.
 ///
 /// The enabled check happens before `format_args!`, so disabled calls do not
 /// evaluate message formatting expressions.
 #[macro_export]
 macro_rules! log {
-    ($module:expr, $level:expr, $($arg:tt)*) => {{
-        if $crate::logger::is_enabled($module, $level) {
-            $crate::logger::emit($module, $level, format_args!($($arg)*));
+    ($level:expr, $($arg:tt)*) => {{
+        let level = $level;
+        let module_path = module_path!();
+        if $crate::logging::is_enabled_for_path(module_path, level) {
+            $crate::logging::emit_for_path(module_path, level, format_args!($($arg)*));
         }
     }};
 }
 
-pub fn frontend_error(message: Arguments<'_>) {
-    emit(LogModule::Frontend, LogLevel::Error, message);
-}
-
-pub fn frontend_warn(message: Arguments<'_>) {
-    emit(LogModule::Frontend, LogLevel::Warn, message);
-}
-
-pub fn frontend_info(message: Arguments<'_>) {
-    emit(LogModule::Frontend, LogLevel::Info, message);
-}
-
-pub fn tauri_error(message: Arguments<'_>) {
-    emit(LogModule::Tauri, LogLevel::Error, message);
-}
-
-pub fn tauri_warn(message: Arguments<'_>) {
-    emit(LogModule::Tauri, LogLevel::Warn, message);
-}
-
-pub fn tauri_info(message: Arguments<'_>) {
-    emit(LogModule::Tauri, LogLevel::Info, message);
-}
-
-pub fn tauri_debug(message: Arguments<'_>) {
-    emit(LogModule::Tauri, LogLevel::Debug, message);
-}
-
-pub fn proxy_error(message: Arguments<'_>) {
-    emit(LogModule::Proxy, LogLevel::Error, message);
-}
-
-pub fn proxy_warn(message: Arguments<'_>) {
-    emit(LogModule::Proxy, LogLevel::Warn, message);
-}
-
-pub fn proxy_info(message: Arguments<'_>) {
-    emit(LogModule::Proxy, LogLevel::Info, message);
-}
-
-pub fn proxy_debug(message: Arguments<'_>) {
-    emit(LogModule::Proxy, LogLevel::Debug, message);
-}
-
-pub fn agent_error(message: Arguments<'_>) {
-    emit(LogModule::Agent, LogLevel::Error, message);
-}
-
-pub fn agent_warn(message: Arguments<'_>) {
-    emit(LogModule::Agent, LogLevel::Warn, message);
-}
-
-pub fn agent_info(message: Arguments<'_>) {
-    emit(LogModule::Agent, LogLevel::Info, message);
-}
-
-pub fn agent_debug(message: Arguments<'_>) {
-    emit(LogModule::Agent, LogLevel::Debug, message);
-}
-
-pub fn commands_error(message: Arguments<'_>) {
-    emit(LogModule::Commands, LogLevel::Error, message);
-}
-
-pub fn commands_warn(message: Arguments<'_>) {
-    emit(LogModule::Commands, LogLevel::Warn, message);
-}
-
-pub fn commands_info(message: Arguments<'_>) {
-    emit(LogModule::Commands, LogLevel::Info, message);
-}
-
-pub fn commands_debug(message: Arguments<'_>) {
-    emit(LogModule::Commands, LogLevel::Debug, message);
-}
-
-pub fn diff_error(message: Arguments<'_>) {
-    emit(LogModule::Diff, LogLevel::Error, message);
-}
-
-pub fn diff_warn(message: Arguments<'_>) {
-    emit(LogModule::Diff, LogLevel::Warn, message);
-}
-
-pub fn diff_info(message: Arguments<'_>) {
-    emit(LogModule::Diff, LogLevel::Info, message);
-}
-
-pub fn diff_debug(message: Arguments<'_>) {
-    emit(LogModule::Diff, LogLevel::Debug, message);
+/// Emit a frontend-originated log using the frontend logger configuration.
+#[macro_export]
+macro_rules! frontend_log {
+    ($level:expr, $($arg:tt)*) => {{
+        let level = $level;
+        if $crate::logging::is_frontend_enabled(level) {
+            $crate::logging::emit_frontend(level, format_args!($($arg)*));
+        }
+    }};
 }
 
 #[cfg(test)]
@@ -236,6 +192,48 @@ mod tests {
         assert_eq!(LogModule::Agent.as_str(), "AGENT");
         assert_eq!(LogModule::Commands.as_str(), "COMMANDS");
         assert_eq!(LogModule::Diff.as_str(), "DIFF");
+    }
+
+    #[test]
+    fn module_path_classification_uses_rust_module_ownership() {
+        assert_eq!(
+            module_from_path("micro_studio_agent_lib::proxy"),
+            LogModule::Proxy
+        );
+        assert_eq!(
+            module_from_path("micro_studio_agent_lib::agent"),
+            LogModule::Agent
+        );
+        assert_eq!(
+            module_from_path("micro_studio_agent_lib::agent::rag"),
+            LogModule::Agent
+        );
+        assert_eq!(
+            module_from_path("micro_studio_agent_lib::commands"),
+            LogModule::Commands
+        );
+        assert_eq!(
+            module_from_path("micro_studio_agent_lib::handlers"),
+            LogModule::Commands
+        );
+        assert_eq!(
+            module_from_path("micro_studio_agent_lib::diff"),
+            LogModule::Diff
+        );
+    }
+
+    #[test]
+    fn unknown_module_paths_fall_back_to_tauri() {
+        for module_path in [
+            "micro_studio_agent_lib::lib",
+            "micro_studio_agent_lib::config",
+            "micro_studio_agent_lib::network",
+            "micro_studio_agent_lib::main",
+            "micro_studio_agent_lib::logging",
+            "micro_studio_agent_lib::frontend",
+        ] {
+            assert_eq!(module_from_path(module_path), LogModule::Tauri);
+        }
     }
 
     #[test]

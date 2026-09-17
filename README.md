@@ -57,6 +57,12 @@ A module emits events at or above its configured threshold. For example,
 `debug`, and `trace` are written to stdout; `warn` and `error` are written to
 stderr. Every line uses the format `[MODULE] [LEVEL] message`.
 
+Rust call sites use `log!(LogLevel, ...)`; `module_path!()` automatically
+classifies the caller as `PROXY`, `AGENT`, `COMMANDS`, `DIFF`, or `TAURI` in
+`src-tauri/src/logging.rs`. Frontend-originated records use `frontend_log!`,
+while diff-save failures are logged by `src-tauri/src/diff.rs` so they retain
+their `DIFF` classification.
+
 The injected frontend sends explicit records through
 `rpcBridge.logMessage(level, message)`. Rust accepts only lowercase `info`,
 `warn`, and `error`, classifies every accepted record as `FRONTEND`, and rejects

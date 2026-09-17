@@ -1,4 +1,4 @@
-# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.2.7
+# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.2.8
 
 ## 1. System Overview
 
@@ -28,7 +28,7 @@ Rather than modifying the original source code directly, the system performs tem
 ┌──────────────────────────────▼──────────────────────────────────┐
 │ [ LAYER 2: Backend (Tauri / Rust) ]                             │
 │  ├─ IPC Handler: Routes commands from the frontend              │
-│  ├─ Logger: Per-module severity filtering and stream routing    │
+│  ├─ Logger: Automatic caller-module classification and stream routing     │
 │  ├─ Knowledge Sync: Copies bundled resources at startup         │
 │  │   └─ Preserves relative paths and rejects path overlap       │
 │  ├─ Workspace Management: $HOME/.micro-zoukei/workspace         │
@@ -90,7 +90,7 @@ Rather than modifying the original source code directly, the system performs tem
 - **Technical Requirements**: Tauri v2, `tokio` (async runtime), `rig` (Function Calling support)
 - **Key Responsibilities**:
   - Load application startup configuration (`config.yml`)
-  - Initialize the per-module logger after the configuration state is committed
+  - Initialize the path-classified logger after the configuration state is committed
   - Synchronize bundled knowledge resources before serving requests
   - Route IPC requests from frontend
   - **Workspace Management**:
@@ -306,6 +306,7 @@ The `api_key_env` field can be omitted when not required by the LLM provider
 | v1.2.5 | 2026-09-13 | Implemented all discrepancies between specification and Rust/Tauri implementation: `rig-core` → `rig` notation, `serde_yaml` → `noyalib`, `api_key` → `api_key_env`, real rusqlite diff recording, RAG integration in executor, per-provider endpoint support, project file monitoring with `notify`, diff recording in handlers |
 | v1.2.6 | 2026-09-17 | Added startup synchronization of packaged knowledge resources, recursive resource packaging, configurable knowledge paths, workspace-scoped configuration defaults, and bidirectional path-overlap protection |
 | v1.2.7 | 2026-09-17 | Added per-module log-level configuration, lazy severity filtering, frontend log IPC classification, stream routing, and logger regression tests |
+| v1.2.8 | 2026-09-17 | Reworked logging to infer Rust modules from `module_path!()`, added frontend-specific logging, and moved diff failure logging into `diff.rs` |
 
 ---
 
@@ -318,14 +319,31 @@ locks `APP_STATE`.
 
 The supported modules are `FRONTEND`, `TAURI`, `PROXY`, `AGENT`, `COMMANDS`,
 and `DIFF`. `LogLevel` uses explicit severity ranks and rejects uppercase or
-unknown values. The `log!` macro checks `is_enabled` before evaluating
-`format_args!`, so disabled calls do not allocate or evaluate their message
-arguments.
+unknown values. Rust call sites use `log!(LogLevel, ...)` without a module
+argument. The macro captures `module_path!()` and classifies the caller from
+its Rust module path; `LogModule` is private to `logging.rs`, and unknown paths
+fall back to `TAURI`.
 
-Rust owns all output routing. `warn` and `error` use stderr; `info`, `debug`,
-and `trace` use stdout. Frontend records enter through the command dispatcher
-and are always classified as `FRONTEND`, independent of any caller-supplied
-module.
+Frontend-originated records cannot be inferred from a Rust caller path, so the
+IPC handler uses the separate `frontend_log!` macro and always selects
+`FRONTEND`. Diff persistence failures are emitted from `diff.rs`, ensuring they
+are classified as `DIFF` instead of the command handler's `COMMANDS` module.
+
+The `log!` macro checks `is_enabled` before evaluating `format_args!`, so
+disabled calls do not allocate or evaluate their message arguments. Rust owns
+all output routing: `warn` and `error` use stderr, while `info`, `debug`, and
+`trace` use stdout.
+
+---
+
+### Summary of Changes (v1.2.7 → v1.2.8)
+
+| Item | Change Description |
+|---|---|
+| **Logging API** | Removed the module argument from `log!` and infer Rust ownership from `module_path!()` |
+| **Frontend IPC** | Added `frontend_log!` for records whose origin cannot be inferred from a Rust path |
+| **Diff Ownership** | Moved diff-save failure logging into `diff.rs` to preserve `DIFF` classification |
+| **Module Boundary** | Renamed `logger.rs` to `logging.rs` and kept the logger enum private |
 
 ---
 

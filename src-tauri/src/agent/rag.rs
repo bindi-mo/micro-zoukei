@@ -18,7 +18,6 @@ use tauri::Emitter;
 use walkdir::WalkDir;
 
 use crate::config::LogLevel;
-use crate::logger::LogModule;
 
 // Helper function to handle RAG re-indexing
 async fn handle_rag_reindex(
@@ -36,21 +35,11 @@ async fn handle_rag_reindex(
     .await
     {
         Ok(count) => {
-            crate::log!(
-                LogModule::Agent,
-                LogLevel::Info,
-                "RAG re-index complete: {} documents",
-                count
-            );
+            crate::log!(LogLevel::Info, "RAG re-index complete: {} documents", count);
             let _ = app_handle.emit("rag-reindexed", count);
         }
         Err(e) => {
-            crate::log!(
-                LogModule::Agent,
-                LogLevel::Error,
-                "RAG re-index failed: {}",
-                e
-            );
+            crate::log!(LogLevel::Error, "RAG re-index failed: {}", e);
         }
     }
 }
@@ -279,19 +268,13 @@ pub fn spawn_knowledge_watcher(
         }) {
             Ok(w) => w,
             Err(e) => {
-                crate::log!(
-                    LogModule::Tauri,
-                    LogLevel::Error,
-                    "Failed to start project watcher: {:?}",
-                    e
-                );
+                crate::log!(LogLevel::Error, "Failed to start project watcher: {:?}", e);
                 return;
             }
         };
 
         if let Err(e) = watcher.configure(Config::default()) {
             crate::log!(
-                LogModule::Tauri,
                 LogLevel::Warn,
                 "Failed to configure project watcher: {:?}",
                 e
@@ -300,7 +283,6 @@ pub fn spawn_knowledge_watcher(
 
         if let Err(e) = watcher.watch(&path, RecursiveMode::Recursive) {
             crate::log!(
-                LogModule::Tauri,
                 LogLevel::Error,
                 "Project watcher failed to watch path: {:?}",
                 e
@@ -308,12 +290,7 @@ pub fn spawn_knowledge_watcher(
             return;
         }
 
-        crate::log!(
-            LogModule::Tauri,
-            LogLevel::Info,
-            "Project watcher started on {:?}",
-            path
-        );
+        crate::log!(LogLevel::Info, "Project watcher started on {:?}", path);
 
         // Debounce: ignore events within 2 seconds of the last re-index
         let mut last_reindex: u64 = 0;
@@ -341,7 +318,6 @@ pub fn spawn_knowledge_watcher(
                     last_reindex = now;
 
                     crate::log!(
-                        LogModule::Tauri,
                         LogLevel::Info,
                         "Project file changed, triggering RAG re-index"
                     );
@@ -359,12 +335,7 @@ pub fn spawn_knowledge_watcher(
                         .await;
                     });
                 }
-                Err(e) => crate::log!(
-                    LogModule::Tauri,
-                    LogLevel::Error,
-                    "Project watcher error: {:?}",
-                    e
-                ),
+                Err(e) => crate::log!(LogLevel::Error, "Project watcher error: {:?}", e),
             }
         }
     });

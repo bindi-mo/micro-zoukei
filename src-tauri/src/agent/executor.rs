@@ -16,7 +16,6 @@ fn resolve_api_key(config_key: &str, default_env: &str) -> Result<String, String
 }
 
 use crate::config::LogLevel;
-use crate::logger::LogModule;
 
 /// Run the AI agent with the given prompt.
 ///
@@ -43,7 +42,6 @@ pub async fn run_agent(
         {
             Ok(ctx) => {
                 crate::log!(
-                    LogModule::Agent,
                     LogLevel::Info,
                     "Retrieved RAG context ({} chars)",
                     ctx.len()
@@ -51,12 +49,7 @@ pub async fn run_agent(
                 Some(ctx)
             }
             Err(e) => {
-                crate::log!(
-                    LogModule::Agent,
-                    LogLevel::Error,
-                    "Failed to retrieve RAG context: {}",
-                    e
-                );
+                crate::log!(LogLevel::Error, "Failed to retrieve RAG context: {}", e);
                 None
             }
         }

@@ -2,7 +2,6 @@ use crate::handlers::{map_error, CommandPayload, CommandResponse};
 use serde_json::Value;
 
 use crate::config::LogLevel;
-use crate::logger::LogModule;
 
 pub async fn mzd_list_files(path: String) -> Result<serde_json::Value, String> {
     crate::handlers::handle_list_files(path).await
@@ -50,7 +49,6 @@ pub async fn mzd_run_agent(prompt: String) -> Result<String, String> {
 pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
     let request_id = uuid::Uuid::new_v4().to_string();
     crate::log!(
-        LogModule::Commands,
         LogLevel::Debug,
         "Request ID: {}, Command: {}",
         request_id,

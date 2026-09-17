@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::config::LogLevel;
+
 pub fn init_db(db_path: &PathBuf) -> Result<(), String> {
     let conn = rusqlite::Connection::open(db_path)
         .map_err(|e| format!("Failed to open diff DB: {}", e))?;
@@ -25,6 +27,23 @@ pub fn save_diff(db_path: &PathBuf, file_path: &str, diff_text: &str) -> Result<
     )
     .map_err(|e| format!("Failed to save diff: {}", e))?;
     Ok(conn.last_insert_rowid())
+}
+
+pub fn save_diff_with_log(
+    db_path: &PathBuf,
+    file_path: &str,
+    diff_text: &str,
+) -> Result<i64, String> {
+    let result = save_diff(db_path, file_path, diff_text);
+    if let Err(error) = &result {
+        crate::log!(
+            LogLevel::Error,
+            "Failed to save diff for {}: {}",
+            file_path,
+            error
+        );
+    }
+    result
 }
 
 pub fn get_all_diffs(db_path: &PathBuf) -> Result<Vec<(String, String)>, String> {
