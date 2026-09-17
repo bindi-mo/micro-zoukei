@@ -79,10 +79,10 @@ var InjectedScript = (function(exports) {
         args: { title, files }
       });
     },
-    logMessage: async (message) => {
+    logMessage: async (level, message) => {
       await fetchCommand({
         commandName: "mzd_log_message",
-        args: { message }
+        args: { level, message }
       });
     },
     isReady: () => {
@@ -149,7 +149,7 @@ var InjectedScript = (function(exports) {
       container.appendChild(errorDiv);
     }
     (async () => {
-      await rpcBridge.logMessage(`[MicroZoukei] Error: ${options.message}`);
+      await rpcBridge.logMessage("error", `[MicroZoukei] Error: ${options.message}`);
     })();
   }
   function hideAllErrors() {
@@ -203,7 +203,7 @@ var InjectedScript = (function(exports) {
     const container = options?.container || document.querySelector(DEFAULT_CONTAINER);
     if (!container) return;
     if (document.body.classList.contains(LOADING_CLASS)) {
-      rpcBridge.logMessage("[MicroZoukei] Loading already visible");
+      rpcBridge.logMessage("info", "[MicroZoukei] Loading already visible");
       return;
     }
     const existingStyle = document.getElementById("micro-zoukei-loading-style");
@@ -226,13 +226,13 @@ var InjectedScript = (function(exports) {
       loadingDiv.innerHTML = `<p>Loading...</p>`;
     }
     container.appendChild(loadingDiv);
-    rpcBridge.logMessage("[MicroZoukei] Loading indicator shown");
+    rpcBridge.logMessage("info", "[MicroZoukei] Loading indicator shown");
   }
   function hideLoading() {
     const loadingElement = document.querySelector(`.${LOADING_CLASS}`);
     if (loadingElement) {
       loadingElement.remove();
-      rpcBridge.logMessage("[MicroZoukei] Loading indicator hidden");
+      rpcBridge.logMessage("info", "[MicroZoukei] Loading indicator hidden");
     }
   }
   function isLoadingDisplayed() {
@@ -3602,7 +3602,7 @@ var InjectedScript = (function(exports) {
       exports.bridgeReady = ready;
       if (exports.bridgeReady) {
         window.microZoukei = rpcBridge;
-        rpcBridge.logMessage("[MicroZoukei] RPC Bridge initialized and ready");
+        rpcBridge.logMessage("info", "[MicroZoukei] RPC Bridge initialized and ready");
         waitForMicroStudioLoad();
       } else {
         showError({
