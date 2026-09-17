@@ -18,8 +18,8 @@ MicroZoukei is a tool that bridges the workspace with `microstudio.dev` through 
 without a nested `Config` wrapper. Tauri stores an immutable `Arc<ConfigState>`
 at startup and shares it with commands and background workers; path
 normalization is applied once during loading. Existing configuration files that
-omit the `knowledge` section or declare `knowledge: {}` automatically use the
-default `$HOME/.micro-zoukei/knowledge_base` path.
+omit the `knowledge` section, declare `knowledge: {}`, or set an empty
+`knowledge.path` automatically use the default `<workspace>/knowledge_base` path.
 
 ### Knowledge Resource Synchronization
 

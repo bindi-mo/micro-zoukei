@@ -29,20 +29,10 @@ pub struct LanceConfig {
     pub path: String,
 }
 
-fn default_knowledge_path() -> String {
-    "$HOME/.micro-zoukei/knowledge_base".to_string()
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct KnowledgeConfig {
-    #[serde(default = "default_knowledge_path")]
+    #[serde(default)]
     pub path: String,
-}
-
-fn default_knowledge_config() -> KnowledgeConfig {
-    KnowledgeConfig {
-        path: default_knowledge_path(),
-    }
 }
 
 fn expand_home_path(path: &str, home_dir: Option<&Path>) -> Result<PathBuf, String> {
@@ -69,6 +59,7 @@ fn expand_home_path(path: &str, home_dir: Option<&Path>) -> Result<PathBuf, Stri
 
 fn normalize_config_paths_with_home(
     mut config: ConfigState,
+    workspace_path: &Path,
     home_dir: Option<&Path>,
 ) -> Result<ConfigState, String> {
     config.projects.path = expand_home_path(&config.projects.path, home_dir)?
@@ -77,6 +68,14 @@ fn normalize_config_paths_with_home(
     config.lancedb.path = expand_home_path(&config.lancedb.path, home_dir)?
         .to_string_lossy()
         .into_owned();
+
+    if config.knowledge.path.is_empty() {
+        config.knowledge.path = workspace_path
+            .join("knowledge_base")
+            .to_string_lossy()
+            .into_owned();
+    }
+
     config.knowledge.path = expand_home_path(&config.knowledge.path, home_dir)?
         .to_string_lossy()
         .into_owned();
@@ -84,9 +83,12 @@ fn normalize_config_paths_with_home(
     Ok(config)
 }
 
-fn normalize_config_paths(config: ConfigState) -> Result<ConfigState, String> {
+fn normalize_config_paths(
+    config: ConfigState,
+    workspace_path: &Path,
+) -> Result<ConfigState, String> {
     let home_dir = std::env::var_os("HOME");
-    normalize_config_paths_with_home(config, home_dir.as_deref().map(Path::new))
+    normalize_config_paths_with_home(config, workspace_path, home_dir.as_deref().map(Path::new))
 }
 
 /// Configuration shared via `Arc<ConfigState>` across Tauri commands and
@@ -100,7 +102,7 @@ pub struct ConfigState {
     pub chat: ChatConfig,
     pub projects: ProjectsConfig,
     pub lancedb: LanceConfig,
-    #[serde(default = "default_knowledge_config")]
+    #[serde(default)]
     pub knowledge: KnowledgeConfig,
 }
 
@@ -149,7 +151,7 @@ pub fn load_config_with_path(
 
     let config: ConfigState =
         noyalib::from_str(&config_str).map_err(|e| format!("Failed to parse config: {}", e))?;
-    normalize_config_paths(config)
+    normalize_config_paths(config, &path)
 }
 
 // Ensure config.yml exists by copying from template.config.yml if needed
@@ -308,7 +310,7 @@ mod tests {
             ..test_config()
         };
 
-        let config = normalize_config_paths_with_home(config, Some(home))
+        let config = normalize_config_paths_with_home(config, Path::new("/workspace"), Some(home))
             .expect("home path expansion should succeed");
 
         assert_eq!(
@@ -331,7 +333,7 @@ mod tests {
             ..test_config()
         };
 
-        let config = normalize_config_paths_with_home(config, Some(home))
+        let config = normalize_config_paths_with_home(config, Path::new("/workspace"), Some(home))
             .expect("path normalization should succeed");
 
         assert_eq!(config.projects.path, "/absolute/projects");
@@ -347,10 +349,26 @@ mod tests {
             ..test_config()
         };
 
-        let error = normalize_config_paths_with_home(config, None)
+        let error = normalize_config_paths_with_home(config, Path::new("/workspace"), None)
             .expect_err("missing HOME should be rejected");
 
         assert_eq!(error, "HOME environment variable is not set");
+    }
+
+    #[test]
+    fn normalizes_empty_knowledge_path_to_workspace() {
+        let home = Path::new("/home/test-user");
+        let config = ConfigState {
+            knowledge: KnowledgeConfig {
+                path: String::new(),
+            },
+            ..test_config()
+        };
+
+        let config = normalize_config_paths_with_home(config, Path::new("/workspace"), Some(home))
+            .expect("empty knowledge path should use the workspace default");
+
+        assert_eq!(config.knowledge.path, "/workspace/knowledge_base");
     }
 
     #[test]
@@ -363,7 +381,7 @@ mod tests {
             ..test_config()
         };
 
-        let config = normalize_config_paths_with_home(config, Some(home))
+        let config = normalize_config_paths_with_home(config, Path::new("/workspace"), Some(home))
             .expect("home path expansion should succeed");
 
         assert_eq!(

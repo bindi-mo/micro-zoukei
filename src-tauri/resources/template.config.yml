@@ -10,5 +10,4 @@ projects:
   path: "$HOME/.micro-zoukei/projects"
 lancedb:
   path: "$HOME/.micro-zoukei/lancedb"
-knowledge:
-  path: "$HOME/.micro-zoukei/knowledge_base"
+knowledge: {}

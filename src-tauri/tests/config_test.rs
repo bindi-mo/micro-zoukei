@@ -103,6 +103,7 @@ knowledge:
     assert_eq!(state.chat.endpoint, "");
     assert_eq!(state.projects.path, "/home/user/projects");
     assert_eq!(state.lancedb.path, "/home/user/lancedb");
+    assert_eq!(state.knowledge.path, "/home/user/knowledge_base");
 }
 
 #[test]
@@ -129,10 +130,7 @@ lancedb:
 
     let state = load_config(temp_dir.path().to_path_buf()).expect("failed to load legacy config");
 
-    let expected_knowledge_path = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .expect("HOME should be set")
-        .join(".micro-zoukei/knowledge_base");
+    let expected_knowledge_path = temp_dir.path().join("knowledge_base");
 
     assert_eq!(
         state.knowledge.path,
@@ -166,10 +164,7 @@ knowledge: {}
     let state = load_config(temp_dir.path().to_path_buf())
         .expect("failed to load config with empty knowledge");
 
-    let expected_knowledge_path = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
-        .expect("HOME should be set")
-        .join(".micro-zoukei/knowledge_base");
+    let expected_knowledge_path = temp_dir.path().join("knowledge_base");
 
     assert_eq!(
         state.knowledge.path,
@@ -177,7 +172,39 @@ knowledge: {}
     );
 }
 
-/// `load_config` should fall back to `config.yaml` when `config.yml` is absent.
+#[test]
+fn config_loads_empty_knowledge_path_with_default_path() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    fs::write(
+        temp_dir.path().join("config.yml"),
+        r#"
+rag:
+  provider: ollama
+  model: nomic-embed-text:latest
+  endpoint: "http://localhost:11434/v1"
+chat:
+  provider: ollama
+  model: gemma4:E4B-it-qat-Q4_K_M
+  endpoint: "http://localhost:11434/v1"
+projects:
+  path: /home/user/projects
+lancedb:
+  path: /home/user/lancedb
+knowledge:
+  path: ""
+"#,
+    )
+    .expect("failed to write config.yml");
+
+    let state = load_config(temp_dir.path().to_path_buf())
+        .expect("failed to load config with empty knowledge path");
+
+    assert_eq!(
+        state.knowledge.path,
+        temp_dir.path().join("knowledge_base").to_string_lossy()
+    );
+}
+
 #[test]
 fn config_loads_from_yaml_fallback() {
     let temp_dir = TempDir::new().expect("failed to create temp dir");
@@ -218,6 +245,7 @@ knowledge:
     assert_eq!(state.chat.endpoint, "http://localhost:11434");
     assert_eq!(state.projects.path, "/home/user/projects");
     assert_eq!(state.lancedb.path, "/home/user/lancedb");
+    assert_eq!(state.knowledge.path, "/home/user/knowledge_base");
 }
 
 /// `load_config` should return `Err` when no config file exists in the directory.
@@ -341,14 +369,8 @@ lancedb:
 knowledge:
   path: "{}"
 "#,
-            temp_dir
-                .path()
-                .join("workspace/projects")
-                .to_string_lossy(),
-            temp_dir
-                .path()
-                .join("workspace/lancedb")
-                .to_string_lossy(),
+            temp_dir.path().join("workspace/projects").to_string_lossy(),
+            temp_dir.path().join("workspace/lancedb").to_string_lossy(),
             destination.to_string_lossy(),
         ),
     )
