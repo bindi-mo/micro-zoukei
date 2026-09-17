@@ -117,9 +117,10 @@ preserving the existing top-level YAML schema without a nested `Config` wrapper.
 The state is loaded and path-normalized once at application startup, then shared
 as an immutable `Arc<ConfigState>` with Tauri commands and background workers.
 This keeps configuration reads lock-free while allowing the knowledge watcher to
-clone the lightweight `Arc` for each re-indexing task. Existing configuration
-files that omit the `knowledge` section, declare `knowledge: {}`, or set an empty
-`knowledge.path` receive the default `<workspace>/knowledge_base` path.
+clone the lightweight `Arc` for each re-indexing task. New configurations omit
+the `knowledge` section and automatically receive the default
+`<workspace>/knowledge_base` path. A custom destination can be configured with
+`knowledge.path` when required.
 
 #### Knowledge Resource Synchronization
 
@@ -246,16 +247,21 @@ chat:
 projects:
   path: "$HOME/.micro-zoukei/projects"
 
-# Knowledge settings
-knowledge: {}
-
 # LanceDB settings
 lancedb:
   path: "$HOME/.micro-zoukei/lancedb"
 ```
 
-`knowledge` may be omitted, declared as `knowledge: {}`, or set to an empty
-`knowledge.path`; all forms use the default path above. The `api_key_env` field can be omitted when not required by the LLM provider (e.g., for local Ollama instances).
+Omit the `knowledge` section to use the default `<workspace>/knowledge_base`
+path. Specify `knowledge.path` only when a custom destination is required:
+
+```yaml
+knowledge:
+  path: "/custom/knowledge_base"
+```
+
+The `api_key_env` field can be omitted when not required by the LLM provider
+(e.g., for local Ollama instances).
 
 ---
 

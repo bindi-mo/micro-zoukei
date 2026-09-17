@@ -138,8 +138,9 @@ lancedb:
     );
 }
 
+/// Empty knowledge objects remain supported for compatibility with older configs.
 #[test]
-fn config_loads_empty_knowledge_object_with_default_path() {
+fn config_loads_empty_knowledge_object_for_backward_compatibility() {
     let temp_dir = TempDir::new().expect("failed to create temp dir");
     fs::write(
         temp_dir.path().join("config.yml"),
@@ -172,8 +173,9 @@ knowledge: {}
     );
 }
 
+/// Empty knowledge paths remain supported for compatibility with older configs.
 #[test]
-fn config_loads_empty_knowledge_path_with_default_path() {
+fn config_loads_empty_knowledge_path_for_backward_compatibility() {
     let temp_dir = TempDir::new().expect("failed to create temp dir");
     fs::write(
         temp_dir.path().join("config.yml"),
