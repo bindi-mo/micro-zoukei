@@ -33,6 +33,11 @@ recursive or destructive copies. A missing source or copy failure prevents the
 application from starting, ensuring the RAG knowledge base is never used in an
 unexpected partial state.
 
+The stored RAG metadata intentionally keeps each document's root-relative path,
+not just its basename. In LanceDB this is the `relative_path` column, which
+keeps nested knowledge files distinct while still matching the source tree
+layout exactly.
+
 ### 1. Proxy Server (`proxy.rs`)
 The proxy acts as the central gateway for all web requests:
 - **Local Assets**: Static files like `.html`, `.js`, and `.css` are served directly from the local cache directory to ensure high performance and offline accessibility.

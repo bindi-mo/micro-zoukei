@@ -52,7 +52,7 @@ pub enum SupportedClient {
 pub struct DocumentRecord {
     pub id: String,
     pub text: String,
-    pub file_name: String,
+    pub relative_path: String,
 }
 
 impl rig::Embed for DocumentRecord {
@@ -63,6 +63,23 @@ impl rig::Embed for DocumentRecord {
         embedder.embed(self.text.clone());
         Ok(())
     }
+}
+
+fn knowledge_relative_path(root_dir: &Path, file_path: &Path) -> Result<String, String> {
+    let normalized_root = root_dir.to_string_lossy().replace('\\', "/");
+    let normalized_file = file_path.to_string_lossy().replace('\\', "/");
+
+    let relative_path = Path::new(&normalized_file)
+        .strip_prefix(Path::new(&normalized_root))
+        .map_err(|e| {
+            format!(
+                "Failed to resolve relative path for {}: {}",
+                file_path.display(),
+                e
+            )
+        })?;
+
+    Ok(relative_path.to_string_lossy().replace('\\', "/"))
 }
 
 pub fn create_llm_client(provider: &str) -> Result<SupportedClient, Box<dyn std::error::Error>> {
@@ -82,20 +99,20 @@ pub fn create_llm_client(provider: &str) -> Result<SupportedClient, Box<dyn std:
 // not `Scannable`, so they must be materialized into a RecordBatch first.
 //
 // A document may produce multiple embeddings; each one becomes its own row in
-// the table, sharing the document's id, file_name, and text.
+// the table, sharing the document's id, relative_path, and text.
 fn as_record_batch(
     records: Vec<(DocumentRecord, Vec<Embedding>)>,
     dims: usize,
 ) -> Result<RecordBatch, lancedb::arrow::arrow_schema::ArrowError> {
     let mut ids: Vec<String> = Vec::new();
-    let mut file_names: Vec<String> = Vec::new();
+    let mut relative_paths: Vec<String> = Vec::new();
     let mut texts: Vec<String> = Vec::new();
     let mut embedding_vecs: Vec<Option<Vec<Option<f64>>>> = Vec::new();
 
     for (record, embeddings) in records {
         for embedding in embeddings {
             ids.push(record.id.clone());
-            file_names.push(record.file_name.clone());
+            relative_paths.push(record.relative_path.clone());
             texts.push(record.text.clone());
             embedding_vecs.push(Some(
                 embedding.vec.into_iter().map(Some).collect::<Vec<_>>(),
@@ -104,14 +121,14 @@ fn as_record_batch(
     }
 
     let id = StringArray::from_iter_values(ids);
-    let file_name = StringArray::from_iter_values(file_names);
+    let relative_path = StringArray::from_iter_values(relative_paths);
     let text = StringArray::from_iter_values(texts);
     let embedding =
         FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(embedding_vecs, dims as i32);
 
     RecordBatch::try_from_iter(vec![
         ("id", Arc::new(id) as ArrayRef),
-        ("file_name", Arc::new(file_name) as ArrayRef),
+        ("relative_path", Arc::new(relative_path) as ArrayRef),
         ("text", Arc::new(text) as ArrayRef),
         ("embedding", Arc::new(embedding) as ArrayRef),
     ])
@@ -133,34 +150,33 @@ pub async fn rag_inject_documents(
 ) -> Result<usize, Box<dyn std::error::Error>> {
     fs::create_dir_all(target_dir)?;
 
+    let root_dir = Path::new(target_dir);
     let mut documents = Vec::new();
     let mut id_counter = 1;
 
-    for entry in WalkDir::new(target_dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(target_dir).into_iter() {
+        let entry = entry?;
         let path = entry.path();
         if is_target_file(path) {
             let content = fs::read_to_string(path)?;
-            let file_name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
+            let relative_path = knowledge_relative_path(root_dir, path)?;
 
             documents.push(DocumentRecord {
                 id: format!("doc_{}", id_counter),
                 text: content,
-                file_name,
+                relative_path,
             });
             id_counter += 1;
         }
     }
 
+    let db = lancedb::connect(db_uri).execute().await?;
     if documents.is_empty() {
+        let _ = db.drop_table("my_documents", &[]).await;
         return Ok(0);
     }
 
     let total_count = documents.len();
-    let db = lancedb::connect(db_uri).execute().await?;
     let client_enum = create_llm_client(provider)?;
 
     // Shared macro to avoid duplicating vector injection code
@@ -175,6 +191,7 @@ pub async fn rag_inject_documents(
             // `Vec<RecordBatch>`). Raw `(document, embeddings)` pairs are not
             // `Scannable`, so materialize them into a RecordBatch first.
             let record_batch = as_record_batch(embeddings, model.ndims())?;
+            let _ = db.drop_table("my_documents", &[]).await;
             let _table = db
                 .create_table("my_documents", vec![record_batch])
                 .execute()
@@ -309,4 +326,32 @@ pub fn spawn_knowledge_watcher(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn knowledge_relative_path_uses_root_relative_paths() {
+        let root_dir = Path::new("/tmp/knowledge");
+
+        let root_file = root_dir.join("intro.md");
+        assert_eq!(
+            knowledge_relative_path(root_dir, &root_file).unwrap(),
+            "intro.md"
+        );
+
+        let nested_file = root_dir.join("guide/nested/shapes.md");
+        assert_eq!(
+            knowledge_relative_path(root_dir, &nested_file).unwrap(),
+            "guide/nested/shapes.md"
+        );
+
+        let windows_like = Path::new("/tmp/knowledge\\guide\\shapes.md");
+        assert_eq!(
+            knowledge_relative_path(root_dir, windows_like).unwrap(),
+            "guide/shapes.md"
+        );
+    }
 }
