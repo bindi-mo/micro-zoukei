@@ -10,3 +10,10 @@ projects:
   path: "$HOME/.micro-zoukei/projects"
 lancedb:
   path: "$HOME/.micro-zoukei/lancedb"
+logger:
+  frontend: info
+  tauri: info
+  proxy: info
+  agent: info
+  commands: info
+  diff: info

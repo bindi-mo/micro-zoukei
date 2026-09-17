@@ -17,6 +17,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use walkdir::WalkDir;
 
+use crate::config::LogLevel;
+use crate::logger::LogModule;
+
 // Helper function to handle RAG re-indexing
 async fn handle_rag_reindex(
     app_handle: tauri::AppHandle,
@@ -33,11 +36,21 @@ async fn handle_rag_reindex(
     .await
     {
         Ok(count) => {
-            println!("[tauri] RAG re-index complete: {} documents", count);
+            crate::log!(
+                LogModule::Agent,
+                LogLevel::Info,
+                "RAG re-index complete: {} documents",
+                count
+            );
             let _ = app_handle.emit("rag-reindexed", count);
         }
         Err(e) => {
-            eprintln!("[tauri] RAG re-index failed: {}", e);
+            crate::log!(
+                LogModule::Agent,
+                LogLevel::Error,
+                "RAG re-index failed: {}",
+                e
+            );
         }
     }
 }
@@ -266,21 +279,41 @@ pub fn spawn_knowledge_watcher(
         }) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("[tauri] failed to start project watcher: {:?}", e);
+                crate::log!(
+                    LogModule::Tauri,
+                    LogLevel::Error,
+                    "Failed to start project watcher: {:?}",
+                    e
+                );
                 return;
             }
         };
 
         if let Err(e) = watcher.configure(Config::default()) {
-            eprintln!("[tauri] failed to configure project watcher: {:?}", e);
+            crate::log!(
+                LogModule::Tauri,
+                LogLevel::Warn,
+                "Failed to configure project watcher: {:?}",
+                e
+            );
         }
 
         if let Err(e) = watcher.watch(&path, RecursiveMode::Recursive) {
-            eprintln!("[tauri] project watcher failed to watch path: {:?}", e);
+            crate::log!(
+                LogModule::Tauri,
+                LogLevel::Error,
+                "Project watcher failed to watch path: {:?}",
+                e
+            );
             return;
         }
 
-        println!("[tauri] project watcher started on {:?}", path);
+        crate::log!(
+            LogModule::Tauri,
+            LogLevel::Info,
+            "Project watcher started on {:?}",
+            path
+        );
 
         // Debounce: ignore events within 2 seconds of the last re-index
         let mut last_reindex: u64 = 0;
@@ -307,7 +340,11 @@ pub fn spawn_knowledge_watcher(
                     }
                     last_reindex = now;
 
-                    println!("[tauri] Project file changed, triggering RAG re-index...");
+                    crate::log!(
+                        LogModule::Tauri,
+                        LogLevel::Info,
+                        "Project file changed, triggering RAG re-index"
+                    );
 
                     // Spawn async re-indexing task
                     let app_handle_cloned = app_handle.clone();
@@ -322,7 +359,12 @@ pub fn spawn_knowledge_watcher(
                         .await;
                     });
                 }
-                Err(e) => eprintln!("[tauri] project watcher error: {:?}", e),
+                Err(e) => crate::log!(
+                    LogModule::Tauri,
+                    LogLevel::Error,
+                    "Project watcher error: {:?}",
+                    e
+                ),
             }
         }
     });

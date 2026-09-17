@@ -77,7 +77,7 @@ export function showError(options: ErrorOptions): void {
 
     // Log to backend asynchronously
     (async () => {
-        await rpcBridge.logMessage(`[MicroZoukei] Error: ${options.message}`);
+        await rpcBridge.logMessage('error', `[MicroZoukei] Error: ${options.message}`);
     })();
 }
 

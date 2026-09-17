@@ -1,6 +1,9 @@
 use crate::handlers::{map_error, CommandPayload, CommandResponse};
 use serde_json::Value;
 
+use crate::config::LogLevel;
+use crate::logger::LogModule;
+
 pub async fn mzd_list_files(path: String) -> Result<serde_json::Value, String> {
     crate::handlers::handle_list_files(path).await
 }
@@ -29,8 +32,8 @@ pub async fn mzd_sync_files(
 }
 
 #[tauri::command]
-pub async fn mzd_log_message(message: String) -> Result<(), String> {
-    crate::handlers::handle_log_message(message).await
+pub async fn mzd_log_message(level: String, message: String) -> Result<(), String> {
+    crate::handlers::handle_log_message(level, message).await
 }
 
 #[tauri::command]
@@ -46,9 +49,12 @@ pub async fn mzd_run_agent(prompt: String) -> Result<String, String> {
 // Dispatcher function - handles incoming HTTP requests from the frontend
 pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
     let request_id = uuid::Uuid::new_v4().to_string();
-    println!(
-        "[DISPATCH] Request ID: {}, Command: {}",
-        request_id, payload.command
+    crate::log!(
+        LogModule::Commands,
+        LogLevel::Debug,
+        "Request ID: {}, Command: {}",
+        request_id,
+        payload.command
     );
 
     match payload.command.as_str() {
@@ -117,17 +123,27 @@ pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
             )
             .await,
         ),
-        "mzd_log_message" => map_error(
-            crate::handlers::handle_log_message(
-                payload
-                    .args
-                    .get("message")
-                    .cloned()
-                    .unwrap_or_default()
-                    .to_string(),
-            )
-            .await,
-        ),
+        "mzd_log_message" => {
+            let level = payload
+                .args
+                .get("level")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let message = payload
+                .args
+                .get("message")
+                .cloned()
+                .unwrap_or_default()
+                .to_string();
+
+            match level.as_str() {
+                "trace" | "debug" | "info" | "warn" | "error" | "critical" => {
+                    map_error(crate::handlers::handle_log_message(level, message).await)
+                }
+                _ => CommandResponse::error(format!("Invalid log level: {}", level)),
+            }
+        }
         "mzd_health" => map_error(crate::handlers::handle_health().await),
         "mzd_run_agent" => map_error(
             crate::handlers::handle_run_agent(

@@ -20,6 +20,8 @@ export interface SyncFilesResponse {
 /**
  * RPC Bridge API exposed to the WebView environment
  */
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'critical';
+
 export interface MicroZoukeiAPI {
     /** List files in a directory */
     listFiles(path?: string): Promise<FileEntry[]>;
@@ -37,7 +39,7 @@ export interface MicroZoukeiAPI {
     syncFiles(title: string, files: ProjectFileItem[]): Promise<SyncFilesResponse>;
 
     /** Log a message to the backend */
-    logMessage(message: string): Promise<void>;
+    logMessage(level: LogLevel, message: string): Promise<void>;
 
     /** Check if the bridge is initialized */
     isReady(): boolean;

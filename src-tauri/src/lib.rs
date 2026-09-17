@@ -1,4 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+use crate::config::LogLevel;
+use crate::logger::LogModule;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -20,6 +22,7 @@ pub mod commands;
 pub mod config;
 pub mod diff;
 pub mod handlers;
+pub mod logger;
 pub mod network;
 pub mod proxy;
 
@@ -49,12 +52,7 @@ impl AppState {
 
         let config_state = std::sync::Arc::new(config::ConfigState::load(workspace_path)?);
         let knowledge_destination = std::path::PathBuf::from(&config_state.knowledge.path);
-        let copied_count = config::copy_knowledge_files(&knowledge_path, &knowledge_destination)?;
-        println!(
-            "[tauri] Copied {} knowledge files to {}",
-            copied_count,
-            knowledge_destination.display()
-        );
+        config::copy_knowledge_files(&knowledge_path, &knowledge_destination)?;
 
         Ok(AppState {
             proxy_port: None,
@@ -133,7 +131,12 @@ fn injected_js_source_path() -> PathBuf {
 #[cfg(debug_assertions)]
 fn read_injected_script(port: u16) -> Result<String, String> {
     let path = injected_js_source_path();
-    eprintln!("[tauri] Attempting to read injected.js from: {:?}", path);
+    crate::log!(
+        LogModule::Tauri,
+        LogLevel::Debug,
+        "Attempting to read injected.js from: {:?}",
+        path
+    );
 
     match wait_for_write_complete(&path, 5000) {
         Ok(_) => {
@@ -175,12 +178,25 @@ fn inject_updated_script(
     let _ = app_handle_cloned.clone().run_on_main_thread(move || {
         if let Some(window) = app_handle_cloned.get_webview_window("main") {
             if let Err(err) = window.eval(&eval_script) {
-                eprintln!("[tauri] injected script reload failed: {:?}", err);
+                crate::log!(
+                    LogModule::Tauri,
+                    LogLevel::Error,
+                    "Injected script reload failed: {:?}",
+                    err
+                );
             } else {
-                println!("[tauri] reloaded injected.js from source");
+                crate::log!(
+                    LogModule::Tauri,
+                    LogLevel::Info,
+                    "Reloaded injected.js from source"
+                );
             }
         } else {
-            eprintln!("[tauri] main window not found for injected script reload");
+            crate::log!(
+                LogModule::Tauri,
+                LogLevel::Warn,
+                "Main window not found for injected script reload"
+            );
         }
     });
 }
@@ -200,18 +216,30 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
         }) {
             Ok(watcher) => watcher,
             Err(err) => {
-                eprintln!("[tauri] failed to start injected.js watcher: {:?}", err);
+                crate::log!(
+                    LogModule::Tauri,
+                    LogLevel::Error,
+                    "Failed to start injected.js watcher: {:?}",
+                    err
+                );
                 return;
             }
         };
 
         if let Err(err) = watcher.configure(notify::Config::default()) {
-            eprintln!("[tauri] failed to configure injected.js watcher: {:?}", err);
+            crate::log!(
+                LogModule::Tauri,
+                LogLevel::Warn,
+                "Failed to configure injected.js watcher: {:?}",
+                err
+            );
         }
 
         if let Err(err) = watcher.watch(&source_path, RecursiveMode::NonRecursive) {
-            eprintln!(
-                "[tauri] injected.js watcher failed to watch path: {:?}",
+            crate::log!(
+                LogModule::Tauri,
+                LogLevel::Error,
+                "Injected.js watcher failed to watch path: {:?}",
                 err
             );
             return;
@@ -229,8 +257,10 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
 
                         let last_time = *last_reload_time.lock().unwrap();
                         if now - last_time < 300 {
-                            eprintln!(
-                                "[tauri] debouncing injected.js reload ({}ms since last reload)",
+                            crate::log!(
+                                LogModule::Tauri,
+                                LogLevel::Debug,
+                                "Debouncing injected.js reload ({}ms since last reload)",
                                 now - last_time
                             );
                             continue;
@@ -241,12 +271,22 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
                                 inject_updated_script(&app_handle, script, last_reload_time.clone())
                             }
                             Err(err) => {
-                                eprintln!("[tauri] failed to reload injected.js: {:?}", err)
+                                crate::log!(
+                                    LogModule::Tauri,
+                                    LogLevel::Error,
+                                    "Failed to reload injected.js: {:?}",
+                                    err
+                                )
                             }
                         };
                     }
                 }
-                Err(err) => eprintln!("[tauri] injected.js watcher error: {:?}", err),
+                Err(err) => crate::log!(
+                    LogModule::Tauri,
+                    LogLevel::Error,
+                    "Injected.js watcher error: {:?}",
+                    err
+                ),
             }
         }
     });
@@ -269,8 +309,6 @@ pub fn run() {
             // create workspace folder
             match get_or_create_workspace(app) {
                 Ok(workspace_path) => {
-                    println!("Workspace path: {:?}", workspace_path);
-                    // You can perform further operations using the path here
                     let _ = WORKSPACE_PATH.set(workspace_path.clone());
 
                     let template_yaml_path = app
@@ -282,12 +320,31 @@ pub fn run() {
                         .resolve("knowledge_base", BaseDirectory::Resource)?;
 
                     // Initialize config state
-                    let mut state = APP_STATE.lock().unwrap();
-                    *state =
-                        AppState::new(workspace_path.clone(), template_yaml_path, knowledge_path)?;
+                    {
+                        let mut state = APP_STATE.lock().unwrap();
+                        *state = AppState::new(
+                            workspace_path.clone(),
+                            template_yaml_path,
+                            knowledge_path,
+                        )?;
+                    }
+                    crate::logger::initialize({
+                        APP_STATE.lock().unwrap().config_state.logger.clone()
+                    });
+                    crate::log!(
+                        LogModule::Tauri,
+                        LogLevel::Info,
+                        "Workspace path: {:?}",
+                        workspace_path
+                    );
                 }
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    crate::log!(
+                        LogModule::Tauri,
+                        LogLevel::Error,
+                        "Failed to create workspace: {}",
+                        e
+                    );
                 }
             }
 
@@ -298,20 +355,31 @@ pub fn run() {
             match proxy::start_proxy(proxy_cache_dir) {
                 Ok(p) => {
                     port = p;
-                    println!("[tauri] Proxy started on port: {}", p);
+                    crate::log!(
+                        LogModule::Tauri,
+                        LogLevel::Info,
+                        "Proxy started on port: {}",
+                        p
+                    );
                     let mut state = APP_STATE.lock().unwrap();
                     state.proxy_port = Some(p);
                     // Clone port for use in read_injected_script (it doesn't implement Copy)
                     let port_clone = p;
                     let init_script = read_injected_script(port_clone).unwrap_or_else(|_| {
-                        eprintln!("[tauri] Failed to read injected.js, using empty script.");
+                        crate::log!(
+                            LogModule::Tauri,
+                            LogLevel::Error,
+                            "Failed to read injected.js, using empty script"
+                        );
                         String::new()
                     });
 
                     // Navigation URL is now determined by the proxy port from the start, bypassing frontend readiness checks
                     let final_url = format!("http://127.0.0.1:{}/", port);
-                    println!(
-                        "[tauri] Initial navigation targeting local proxy: {}",
+                    crate::log!(
+                        LogModule::Tauri,
+                        LogLevel::Info,
+                        "Initial navigation targeting local proxy: {}",
                         final_url
                     );
 
@@ -330,7 +398,12 @@ pub fn run() {
                     .build()?;
                 }
                 Err(e) => {
-                    eprintln!("[tauri] Failed to start proxy: {}", e);
+                    crate::log!(
+                        LogModule::Tauri,
+                        LogLevel::Error,
+                        "Failed to start proxy: {}",
+                        e
+                    );
                     return Err(std::io::Error::other(e.to_string()).into());
                 }
             }

@@ -4,6 +4,7 @@
  */
 
 import { bridgeReady } from '../injected';
+import type { LogLevel } from '../types/injected';
 import type { FileEntry, MicroZoukeiAPI, ProjectFileItem, SyncFilesResponse } from '../types/injected';
 
 const COMMAND_MAP: Record<string, string> = {
@@ -121,10 +122,10 @@ export const rpcBridge: MicroZoukeiAPI = {
         }) as SyncFilesResponse;
     },
 
-    logMessage: async (message: string): Promise<void> => {
+    logMessage: async (level: LogLevel, message: string): Promise<void> => {
         await fetchCommand({
             commandName: 'mzd_log_message',
-            args: { message }
+            args: { level, message }
         });
     },
 

@@ -1,4 +1,4 @@
-# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.2.6
+# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.2.7
 
 ## 1. System Overview
 
@@ -28,6 +28,7 @@ Rather than modifying the original source code directly, the system performs tem
 ┌──────────────────────────────▼──────────────────────────────────┐
 │ [ LAYER 2: Backend (Tauri / Rust) ]                             │
 │  ├─ IPC Handler: Routes commands from the frontend              │
+│  ├─ Logger: Per-module severity filtering and stream routing    │
 │  ├─ Knowledge Sync: Copies bundled resources at startup         │
 │  │   └─ Preserves relative paths and rejects path overlap       │
 │  ├─ Workspace Management: $HOME/.micro-zoukei/workspace         │
@@ -89,6 +90,7 @@ Rather than modifying the original source code directly, the system performs tem
 - **Technical Requirements**: Tauri v2, `tokio` (async runtime), `rig` (Function Calling support)
 - **Key Responsibilities**:
   - Load application startup configuration (`config.yml`)
+  - Initialize the per-module logger after the configuration state is committed
   - Synchronize bundled knowledge resources before serving requests
   - Route IPC requests from frontend
   - **Workspace Management**:
@@ -112,15 +114,16 @@ Rather than modifying the original source code directly, the system performs tem
 #### Configuration State and Ownership
 
 `ConfigState` is the only application configuration aggregate. It directly
-contains the `rag`, `chat`, `projects`, `lancedb`, and `knowledge` fields,
-preserving the existing top-level YAML schema without a nested `Config` wrapper.
-The state is loaded and path-normalized once at application startup, then shared
-as an immutable `Arc<ConfigState>` with Tauri commands and background workers.
-This keeps configuration reads lock-free while allowing the knowledge watcher to
-clone the lightweight `Arc` for each re-indexing task. New configurations omit
-the `knowledge` section and automatically receive the default
-`<workspace>/knowledge_base` path. A custom destination can be configured with
-`knowledge.path` when required.
+contains the `rag`, `chat`, `projects`, `lancedb`, `knowledge`, and `logger`
+fields, preserving the existing top-level YAML schema without a nested `Config`
+wrapper. The state is loaded and path-normalized once at application startup,
+then shared as an immutable `Arc<ConfigState>` with Tauri commands and
+background workers. This keeps configuration reads lock-free while allowing the
+knowledge watcher to clone the lightweight `Arc` for each re-indexing task. New
+configurations omit the `knowledge` and `logger` sections and automatically
+receive the default `<workspace>/knowledge_base` path and `info` logger
+thresholds. Custom destinations and log levels can be configured with
+`knowledge.path` and `logger.<module>` when required.
 
 #### Knowledge Resource Synchronization
 
@@ -185,7 +188,7 @@ started with an incomplete knowledge base. Tauri packages the recursive
 
 ## 5. Data Communication Sequence (Implementation Flow)
 
-1. **Initialization**: Tauri app starts → resolves the packaged `resources/knowledge_base` → reads `config.yml` → normalizes `config.knowledge.path` → recursively copies bundled knowledge files → rejects copy/overlap errors → initializes LanceDB
+1. **Initialization**: Tauri app starts → resolves the packaged `resources/knowledge_base` → reads `config.yml` → normalizes `config.knowledge.path` → recursively copies bundled knowledge files → rejects copy/overlap errors → initializes LanceDB → initializes the logger from `config.logger`
 2. **Project Loading**: User selects project → writes all files to `$HOME/.micro-zoukei/workspace/{project_name}` → preserves existing files while collecting diffs
 3. **Index Construction**: Document loading → chunking → embedding API → storage in LanceDB
 4. **Prompt Sending**: Enter instruction in chat → sends to backend via reverse proxy using Tauri `fetch`
@@ -202,6 +205,7 @@ started with an incomplete knowledge base. Tauri packages the recursive
 8. **Diff Generation**: Generates diff data before/after changes (records in rusqlite) → responds to frontend
 9. **Diff Review & Approval**: Frontend displays **unified diff + diff2html** → user approves
 10. **Sync Completion**: After approval, force-updates microStudio editor buffers and persists to local files
+11. **Frontend Diagnostics**: Explicit frontend records use `rpcBridge.logMessage(level, message)` → `/api/command` → `mzd_log_message` → Rust classifies them as `FRONTEND`
 
 ---
 
@@ -250,7 +254,28 @@ projects:
 # LanceDB settings
 lancedb:
   path: "$HOME/.micro-zoukei/lancedb"
+
+# Runtime log thresholds
+logger:
+  frontend: info
+  tauri: info
+  proxy: info
+  agent: info
+  commands: info
+  diff: info
 ```
+
+Each logger module accepts `off`, `error`, `warn`, `info`, `debug`, or `trace`.
+The severity order is `trace < debug < info < warn < error`; a module emits
+events at or above its configured threshold, while `off` suppresses all events.
+Omitting `logger` or individual module fields defaults each module to `info`.
+`info`, `debug`, and `trace` are written to stdout, while `warn` and `error`
+are written to stderr. Output uses `[MODULE] [LEVEL] message`.
+
+The injected frontend sends explicit records through `rpcBridge.logMessage`.
+Rust accepts only lowercase `info`, `warn`, and `error`, forces their module to
+`FRONTEND`, rejects invalid levels as IPC errors, and returns success for
+suppressed records. Browser console output is not intercepted automatically.
 
 Omit the `knowledge` section to use the default `<workspace>/knowledge_base`
 path. Specify `knowledge.path` only when a custom destination is required:
@@ -280,6 +305,27 @@ The `api_key_env` field can be omitted when not required by the LLM provider
 | v1.2.4 | 2026-09-13 | Specified IPC communication method (fetch via reverse proxy), added `notify`, removed LanceDB memory usage descriptions, clarified Function Calling support conditions, added per-project workspace subdirectories, added per-provider API endpoint configuration in config.yml, unified notation (sqlite3 → SQLite), specified streaming performance considerations |
 | v1.2.5 | 2026-09-13 | Implemented all discrepancies between specification and Rust/Tauri implementation: `rig-core` → `rig` notation, `serde_yaml` → `noyalib`, `api_key` → `api_key_env`, real rusqlite diff recording, RAG integration in executor, per-provider endpoint support, project file monitoring with `notify`, diff recording in handlers |
 | v1.2.6 | 2026-09-17 | Added startup synchronization of packaged knowledge resources, recursive resource packaging, configurable knowledge paths, workspace-scoped configuration defaults, and bidirectional path-overlap protection |
+| v1.2.7 | 2026-09-17 | Added per-module log-level configuration, lazy severity filtering, frontend log IPC classification, stream routing, and logger regression tests |
+
+---
+
+### Logger Design
+
+The logger is initialized after `AppState` commits the loaded `ConfigState`,
+ensuring that startup diagnostics use the configured thresholds. `LoggerConfig`
+is stored in a process-wide `OnceLock<Arc<LoggerConfig>>`; log emission never
+locks `APP_STATE`.
+
+The supported modules are `FRONTEND`, `TAURI`, `PROXY`, `AGENT`, `COMMANDS`,
+and `DIFF`. `LogLevel` uses explicit severity ranks and rejects uppercase or
+unknown values. The `log!` macro checks `is_enabled` before evaluating
+`format_args!`, so disabled calls do not allocate or evaluate their message
+arguments.
+
+Rust owns all output routing. `warn` and `error` use stderr; `info`, `debug`,
+and `trace` use stdout. Frontend records enter through the command dispatcher
+and are always classified as `FRONTEND`, independent of any caller-supplied
+module.
 
 ---
 

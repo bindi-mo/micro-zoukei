@@ -18,6 +18,9 @@ use tokio_tungstenite::tungstenite::protocol::Message as TungMessage;
 use warp::ws::Ws;
 use warp::{http::Response as WarpResponse, hyper::StatusCode, Filter};
 
+use crate::config::LogLevel;
+use crate::logger::LogModule;
+
 /*
  A function that forces the copying of past localStorage data to
  the new port even if the dynamic port changes
@@ -40,9 +43,12 @@ fn migrate_local_storage(cache_dir: &Path, new_port: u16) {
 
         // Perform the copy operation only if the port number has changed.
         if last_port != new_port_str {
-            println!(
-                "[proxy] Detect port changes: {} -> {}",
-                last_port, new_port_str
+            crate::log!(
+                LogModule::Proxy,
+                LogLevel::Info,
+                "Detected port change: {} -> {}",
+                last_port,
+                new_port_str
             );
 
             // List of 3 file extensions to copy
@@ -61,19 +67,34 @@ fn migrate_local_storage(cache_dir: &Path, new_port: u16) {
 
                     // Copy (duplicate) the entire set of historical data as a new port name
                     if let Err(e) = fs::copy(&old_file_path, &new_file_path) {
-                        eprintln!("[proxy] ❌ Failed to copy localStorage: {}", e);
+                        crate::log!(
+                            LogModule::Proxy,
+                            LogLevel::Error,
+                            "Failed to copy localStorage: {}",
+                            e
+                        );
                     } else {
-                        println!("[proxy] 📄 The file has been copied.: {}", old_filename);
+                        crate::log!(
+                            LogModule::Proxy,
+                            LogLevel::Info,
+                            "Copied localStorage file: {}",
+                            old_filename
+                        );
 
                         // Once the copy is complete, delete the old files that are no longer needed.
                         if let Err(e) = fs::remove_file(&old_file_path) {
-                            eprintln!(
-                                "[proxy] ⚠️ Failed to delete old files: {}, Reason: {}",
-                                old_filename, e
+                            crate::log!(
+                                LogModule::Proxy,
+                                LogLevel::Warn,
+                                "Failed to delete old localStorage file {}: {}",
+                                old_filename,
+                                e
                             );
                         } else {
-                            println!(
-                                "[proxy] 🧹 I deleted some old junk files.: {}",
+                            crate::log!(
+                                LogModule::Proxy,
+                                LogLevel::Info,
+                                "Deleted old localStorage file: {}",
                                 old_filename
                             );
                         }
@@ -177,7 +198,12 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
                 if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&s) {
                     let mut store = cookie_store.lock().unwrap();
                     *store = map;
-                    println!("[proxy] loaded {} cookies from disk", store.len());
+                    crate::log!(
+                        LogModule::Proxy,
+                        LogLevel::Debug,
+                        "Loaded {} cookies from disk",
+                        store.len()
+                    );
                 }
             }
         }
@@ -192,7 +218,12 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
         {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[proxy] failed to build runtime: {}", e);
+                crate::log!(
+                    LogModule::Proxy,
+                    LogLevel::Error,
+                    "Failed to build runtime: {}",
+                    e
+                );
                 let _ = tx.send(0u16);
                 return;
             }
@@ -245,7 +276,12 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
             let (addr, server) = warp::serve(route).bind_ephemeral(([127, 0, 0, 1], 0));
             let port = addr.port();
             let _ = tx.send(port);
-            println!("[proxy] started on http://127.0.0.1:{}", port);
+            crate::log!(
+                LogModule::Proxy,
+                LogLevel::Info,
+                "Started on http://127.0.0.1:{}",
+                port
+            );
 
             server.await;
         });
@@ -292,7 +328,12 @@ fn prune_cache(cache_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error + Se
         let _ = fs::remove_file(&p);
         let _ = fs::remove_file(&meta);
         total = total.saturating_sub(sz);
-        println!("[proxy] evicted cache file: {}", p.display());
+        crate::log!(
+            LogModule::Proxy,
+            LogLevel::Debug,
+            "Evicted cache file: {}",
+            p.display()
+        );
     }
     Ok(())
 }
@@ -373,7 +414,12 @@ self.addEventListener('fetch', (e) => {
 
             // Add some headers to prevent issues with local files
             let response = builder.body(bytes.to_vec());
-            println!("[proxy] serving local asset: {}", path);
+            crate::log!(
+                LogModule::Proxy,
+                LogLevel::Debug,
+                "Serving local asset: {}",
+                path
+            );
             return Ok(response);
         }
     }
@@ -431,14 +477,24 @@ self.addEventListener('fetch', (e) => {
                     builder = builder.header("content-type", content_type);
                     // return cached body
                     let response = builder.body(bytes);
-                    println!("[proxy] cache hit: {}", upstream);
+                    crate::log!(
+                        LogModule::Proxy,
+                        LogLevel::Debug,
+                        "[proxy] cache hit: {}",
+                        upstream
+                    );
                     return Ok(response);
                 }
             }
         }
     }
 
-    println!("[proxy] cache miss, fetching upstream: {}", upstream);
+    crate::log!(
+        LogModule::Proxy,
+        LogLevel::Debug,
+        "[proxy] cache miss, fetching upstream: {}",
+        upstream
+    );
 
     // forward selected headers (user-agent) and include cookies from server-side store
     let client = reqwest::Client::new();
@@ -486,7 +542,12 @@ self.addEventListener('fetch', (e) => {
     let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[proxy] upstream request failed: {}", e);
+            crate::log!(
+                LogModule::Proxy,
+                LogLevel::Error,
+                "Upstream request failed: {}",
+                e
+            );
             return Ok(WarpResponse::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .body(format!("upstream error: {}", e).into()));
@@ -498,7 +559,12 @@ self.addEventListener('fetch', (e) => {
     let bytes = match resp.bytes().await {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("[proxy] reading upstream body failed: {}", e);
+            crate::log!(
+                LogModule::Proxy,
+                LogLevel::Error,
+                "Reading upstream body failed: {}",
+                e
+            );
             return Ok(WarpResponse::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .body(format!("upstream read error: {}", e).into()));
@@ -534,10 +600,21 @@ self.addEventListener('fetch', (e) => {
             "fetched_at": Utc::now().to_rfc3339(),
         });
         let _ = fs::write(&meta_path, serde_json::to_string(&meta).unwrap_or_default());
-        println!("[proxy] cached: {} -> {}", upstream, body_path.display());
+        crate::log!(
+            LogModule::Proxy,
+            LogLevel::Debug,
+            "Cached: {} -> {}",
+            upstream,
+            body_path.display()
+        );
         // prune cache if over limit
         if let Err(e) = prune_cache(&cache_dir) {
-            eprintln!("[proxy] prune_cache failed: {}", e);
+            crate::log!(
+                LogModule::Proxy,
+                LogLevel::Error,
+                "Cache pruning failed: {}",
+                e
+            );
         }
     }
 
@@ -554,7 +631,7 @@ self.addEventListener('fetch', (e) => {
                         store.insert(k.clone(), format!("{}={}", k, v));
                         // synthesize a minimal Set-Cookie for the proxy origin so browser stores it
                         synthesized_set_cookie.push(format!("{}={}; Path=/", k, v));
-                        println!("[proxy] stored cookie: {}", k);
+                        crate::log!(LogModule::Proxy, LogLevel::Debug, "Stored cookie: {}", k);
                         // persist cookie store
                         let cookie_file = cache_dir.join("cookies.json");
                         if let Ok(s) = serde_json::to_string(&*store) {
@@ -609,7 +686,12 @@ async fn handle_ws_upgrade(
     Ok(
         ws.on_upgrade(move |client_ws: warp::ws::WebSocket| async move {
             let headers = headers_cloned;
-            println!("[proxy] ws upgrade requested: {}", upstream);
+            crate::log!(
+                LogModule::Proxy,
+                LogLevel::Debug,
+                "WebSocket upgrade requested: {}",
+                upstream
+            );
             let cookie_header = {
                 let store = cookie_store.lock().unwrap();
                 if store.is_empty() {
@@ -644,12 +726,18 @@ async fn handle_ws_upgrade(
                         }
                     }
 
-                    println!("[proxy] forwarding headers to upstream");
+                    crate::log!(
+                        LogModule::Proxy,
+                        LogLevel::Debug,
+                        "Forwarding headers to upstream"
+                    );
 
                     match connect_async(client_req).await {
                         Ok((upstream_ws, resp)) => {
-                            println!(
-                                "[proxy] ws connected upstream: {} (status: {})",
+                            crate::log!(
+                                LogModule::Proxy,
+                                LogLevel::Debug,
+                                "WebSocket connected upstream: {} (status: {})",
                                 upstream,
                                 resp.status()
                             );
@@ -732,12 +820,22 @@ async fn handle_ws_upgrade(
                             }
                         }
                         Err(e) => {
-                            eprintln!("[proxy] ws connect failed: {}", e);
+                            crate::log!(
+                                LogModule::Proxy,
+                                LogLevel::Error,
+                                "WebSocket connect failed: {}",
+                                e
+                            );
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("[proxy] into_client_request failed: {}", e);
+                    crate::log!(
+                        LogModule::Proxy,
+                        LogLevel::Error,
+                        "WebSocket request creation failed: {}",
+                        e
+                    );
                 }
             }
         }),

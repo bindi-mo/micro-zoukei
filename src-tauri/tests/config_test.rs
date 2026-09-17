@@ -1,6 +1,6 @@
 use micro_studio_agent_lib::config::{
-    copy_knowledge_files, load_config, ChatConfig, ConfigState, LanceConfig, ProjectsConfig,
-    RagConfig,
+    copy_knowledge_files, load_config, ChatConfig, ConfigState, LanceConfig, LogLevel,
+    LoggerConfig, ProjectsConfig, RagConfig,
 };
 use std::fs;
 use tempfile::TempDir;
@@ -47,6 +47,7 @@ fn config_clone_preserves_values() {
         knowledge: micro_studio_agent_lib::config::KnowledgeConfig {
             path: "/home/user/knowledge_base".to_string(),
         },
+        ..Default::default()
     };
 
     let cloned = original.clone();
@@ -204,6 +205,175 @@ knowledge:
     assert_eq!(
         state.knowledge.path,
         temp_dir.path().join("knowledge_base").to_string_lossy()
+    );
+}
+
+#[test]
+fn logger_config_is_omitted_defaults_to_info() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    fs::write(
+        temp_dir.path().join("config.yml"),
+        r#"
+rag:
+  provider: ""
+  model: ""
+  endpoint: ""
+chat:
+  provider: ""
+  model: ""
+  endpoint: ""
+projects:
+  path: ""
+lancedb:
+  path: ""
+"#,
+    )
+    .expect("failed to write config.yml");
+
+    let state =
+        load_config(temp_dir.path().to_path_buf()).expect("failed to load config without logger");
+
+    assert_eq!(state.logger, LoggerConfig::default());
+}
+
+#[test]
+fn empty_logger_config_defaults_to_info() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    fs::write(
+        temp_dir.path().join("config.yml"),
+        r#"
+rag:
+  provider: ""
+  model: ""
+  endpoint: ""
+chat:
+  provider: ""
+  model: ""
+  endpoint: ""
+projects:
+  path: ""
+lancedb:
+  path: ""
+logger: {}
+"#,
+    )
+    .expect("failed to write config.yml");
+
+    let state = load_config(temp_dir.path().to_path_buf())
+        .expect("failed to load config with empty logger");
+
+    assert_eq!(state.logger, LoggerConfig::default());
+}
+
+#[test]
+fn logger_config_applies_defaults_to_omitted_modules() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    fs::write(
+        temp_dir.path().join("config.yml"),
+        r#"
+rag:
+  provider: ""
+  model: ""
+  endpoint: ""
+chat:
+  provider: ""
+  model: ""
+  endpoint: ""
+projects:
+  path: ""
+lancedb:
+  path: ""
+logger:
+  frontend: error
+  proxy: off
+  commands: trace
+"#,
+    )
+    .expect("failed to write config.yml");
+
+    let state = load_config(temp_dir.path().to_path_buf())
+        .expect("failed to load partially configured logger");
+
+    assert_eq!(state.logger.frontend, LogLevel::Error);
+    assert_eq!(state.logger.tauri, LogLevel::Info);
+    assert_eq!(state.logger.proxy, LogLevel::Off);
+    assert_eq!(state.logger.agent, LogLevel::Info);
+    assert_eq!(state.logger.commands, LogLevel::Trace);
+    assert_eq!(state.logger.diff, LogLevel::Info);
+}
+
+#[test]
+fn logger_config_supports_all_levels() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    fs::write(
+        temp_dir.path().join("config.yml"),
+        r#"
+rag:
+  provider: ""
+  model: ""
+  endpoint: ""
+chat:
+  provider: ""
+  model: ""
+  endpoint: ""
+projects:
+  path: ""
+lancedb:
+  path: ""
+logger:
+  frontend: off
+  tauri: error
+  proxy: warn
+  agent: info
+  commands: debug
+  diff: trace
+"#,
+    )
+    .expect("failed to write config.yml");
+
+    let state =
+        load_config(temp_dir.path().to_path_buf()).expect("failed to load fully configured logger");
+
+    assert_eq!(state.logger.frontend, LogLevel::Off);
+    assert_eq!(state.logger.tauri, LogLevel::Error);
+    assert_eq!(state.logger.proxy, LogLevel::Warn);
+    assert_eq!(state.logger.agent, LogLevel::Info);
+    assert_eq!(state.logger.commands, LogLevel::Debug);
+    assert_eq!(state.logger.diff, LogLevel::Trace);
+}
+
+#[test]
+fn logger_config_rejects_invalid_levels() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    fs::write(
+        temp_dir.path().join("config.yml"),
+        r#"
+rag:
+  provider: ""
+  model: ""
+  endpoint: ""
+chat:
+  provider: ""
+  model: ""
+  endpoint: ""
+projects:
+  path: ""
+lancedb:
+  path: ""
+logger:
+  frontend: INFO
+"#,
+    )
+    .expect("failed to write config.yml");
+
+    let error = load_config(temp_dir.path().to_path_buf())
+        .expect_err("uppercase log levels should be rejected");
+
+    let error = error.to_ascii_lowercase();
+    assert!(error.contains("info"), "unexpected error: {error}");
+    assert!(
+        error.contains("expected one of"),
+        "unexpected error: {error}"
     );
 }
 

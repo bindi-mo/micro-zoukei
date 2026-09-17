@@ -82,7 +82,7 @@ if (typeof window !== 'undefined') {
             // Expose RPC bridge to window object
             (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei = rpcBridge;
 
-            rpcBridge.logMessage('[MicroZoukei] RPC Bridge initialized and ready');
+            rpcBridge.logMessage('info', '[MicroZoukei] RPC Bridge initialized and ready');
 
             // ----------------------------------------------------
             // Initalize UI extention

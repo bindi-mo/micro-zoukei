@@ -14,13 +14,14 @@ MicroZoukei is a tool that bridges the workspace with `microstudio.dev` through 
 ### Configuration State
 
 `ConfigState` is the sole configuration aggregate. It directly owns the `rag`,
-`chat`, `projects`, `lancedb`, and `knowledge` sections from the YAML schema,
-without a nested `Config` wrapper. Tauri stores an immutable `Arc<ConfigState>`
-at startup and shares it with commands and background workers; path
-normalization is applied once during loading. New configurations omit the
-`knowledge` section and automatically use the default
-`<workspace>/knowledge_base` path. A custom destination can be configured with
-`knowledge.path` when required.
+`chat`, `projects`, `lancedb`, `knowledge`, and `logger` sections from the YAML
+schema, without a nested `Config` wrapper. Tauri stores an immutable
+`Arc<ConfigState>` at startup and shares it with commands and background
+workers; path normalization is applied once during loading. New configurations
+may omit the `knowledge` and `logger` sections. Knowledge paths default to
+`<workspace>/knowledge_base`, while every logger module defaults to `info`.
+Custom destinations and log thresholds can be configured with `knowledge.path`
+and `logger.<module>` when required.
 
 ### Knowledge Resource Synchronization
 
@@ -33,10 +34,34 @@ recursive or destructive copies. A missing source or copy failure prevents the
 application from starting, ensuring the RAG knowledge base is never used in an
 unexpected partial state.
 
-The stored RAG metadata intentionally keeps each document's root-relative path,
-not just its basename. In LanceDB this is the `relative_path` column, which
-keeps nested knowledge files distinct while still matching the source tree
-layout exactly.
+### Logger Configuration
+
+Runtime logs use per-module severity thresholds from `config.yml`. The
+supported modules are `frontend`, `tauri`, `proxy`, `agent`, `commands`, and
+`diff`. Each module accepts `off`, `error`, `warn`, `info`, `debug`, or `trace`;
+all modules default to `info` when the section or individual fields are
+omitted.
+
+```yaml
+logger:
+  frontend: info
+  tauri: info
+  proxy: info
+  agent: info
+  commands: info
+  diff: info
+```
+
+A module emits events at or above its configured threshold. For example,
+`warn` emits `warn` and `error`, while `off` suppresses all events. `info`,
+`debug`, and `trace` are written to stdout; `warn` and `error` are written to
+stderr. Every line uses the format `[MODULE] [LEVEL] message`.
+
+The injected frontend sends explicit records through
+`rpcBridge.logMessage(level, message)`. Rust accepts only lowercase `info`,
+`warn`, and `error`, classifies every accepted record as `FRONTEND`, and rejects
+invalid levels as IPC errors. Suppressed records return successfully. Browser
+console output is not intercepted automatically.
 
 ### 1. Proxy Server (`proxy.rs`)
 The proxy acts as the central gateway for all web requests:
