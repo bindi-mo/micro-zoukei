@@ -1,4 +1,4 @@
-# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.2.5
+# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.2.6
 
 ## 1. System Overview
 
@@ -28,6 +28,8 @@ Rather than modifying the original source code directly, the system performs tem
 ┌──────────────────────────────▼──────────────────────────────────┐
 │ [ LAYER 2: Backend (Tauri / Rust) ]                             │
 │  ├─ IPC Handler: Routes commands from the frontend              │
+│  ├─ Knowledge Sync: Copies bundled resources at startup         │
+│  │   └─ Preserves relative paths and rejects path overlap       │
 │  ├─ Workspace Management: $HOME/.micro-zoukei/workspace         │
 │  │   └─ Creates per-project subdirectories                      │
 │  │   └─ When all files arrive from frontend, writes to workspace│
@@ -87,6 +89,7 @@ Rather than modifying the original source code directly, the system performs tem
 - **Technical Requirements**: Tauri v2, `tokio` (async runtime), `rig` (Function Calling support)
 - **Key Responsibilities**:
   - Load application startup configuration (`config.yml`)
+  - Synchronize bundled knowledge resources before serving requests
   - Route IPC requests from frontend
   - **Workspace Management**:
     - Physical location: `$HOME/.micro-zoukei/workspace`
@@ -109,12 +112,29 @@ Rather than modifying the original source code directly, the system performs tem
 #### Configuration State and Ownership
 
 `ConfigState` is the only application configuration aggregate. It directly
-contains the `rag`, `chat`, `projects`, and `lancedb` fields, preserving the
-existing top-level YAML schema without a nested `Config` wrapper. The state is
-loaded and path-normalized once at application startup, then shared as an
-immutable `Arc<ConfigState>` with Tauri commands and background workers. This
-keeps configuration reads lock-free while allowing the knowledge watcher to
-clone the lightweight `Arc` for each re-indexing task.
+contains the `rag`, `chat`, `projects`, `lancedb`, and `knowledge` fields,
+preserving the existing top-level YAML schema without a nested `Config` wrapper.
+The state is loaded and path-normalized once at application startup, then shared
+as an immutable `Arc<ConfigState>` with Tauri commands and background workers.
+This keeps configuration reads lock-free while allowing the knowledge watcher to
+clone the lightweight `Arc` for each re-indexing task. Existing configuration
+files that omit the `knowledge` section or declare `knowledge: {}` receive the
+default `$HOME/.micro-zoukei/knowledge_base` path.
+
+#### Knowledge Resource Synchronization
+
+During Tauri setup, Rust resolves the packaged `resources/knowledge_base`
+directory through `BaseDirectory::Resource` and reads the destination from
+`config.knowledge.path`. Before the reverse proxy starts, it recursively copies
+regular files while preserving their relative paths. Source files overwrite
+matching destination files, destination-only files remain untouched, and source
+symlinks are not followed.
+
+Both paths are canonicalized before copying. Equal paths and overlap in either
+direction are rejected. A missing resource, inaccessible destination, or copy
+failure is returned from application initialization, so the proxy and UI are not
+started with an incomplete knowledge base. Tauri packages the recursive
+`resources/knowledge_base/**/*` resource glob to retain nested documentation.
 
 ### Rig Function Executor (Detailed)
 
@@ -164,7 +184,7 @@ clone the lightweight `Arc` for each re-indexing task.
 
 ## 5. Data Communication Sequence (Implementation Flow)
 
-1. **Initialization**: Tauri app starts → reads `config.yml` → initializes LanceDB
+1. **Initialization**: Tauri app starts → resolves the packaged `resources/knowledge_base` → reads `config.yml` → normalizes `config.knowledge.path` → recursively copies bundled knowledge files → rejects copy/overlap errors → initializes LanceDB
 2. **Project Loading**: User selects project → writes all files to `$HOME/.micro-zoukei/workspace/{project_name}` → preserves existing files while collecting diffs
 3. **Index Construction**: Document loading → chunking → embedding API → storage in LanceDB
 4. **Prompt Sending**: Enter instruction in chat → sends to backend via reverse proxy using Tauri `fetch`
@@ -222,16 +242,21 @@ chat:
   api_key_env: "OPENAI_API_KEY"
   endpoint: "https://api.openai.com/v1/chat/completions"  # Per-provider endpoint
 
-# Workspace settings
-workspace:
-  path: "$HOME/.micro-zoukei/workspace"
+# Projects settings
+projects:
+  path: "$HOME/.micro-zoukei/projects"
+
+# Knowledge settings
+knowledge:
+  path: "$HOME/.micro-zoukei/knowledge_base"
 
 # LanceDB settings
 lancedb:
   path: "$HOME/.micro-zoukei/lancedb"
 ```
 
-Note: The `api_key_env` field can be omitted when not required by the LLM provider (e.g., for local Ollama instances).
+`knowledge` may be omitted or declared as `knowledge: {}`; both forms use the
+default path above. The `api_key_env` field can be omitted when not required by the LLM provider (e.g., for local Ollama instances).
 
 ---
 
@@ -249,6 +274,19 @@ Note: The `api_key_env` field can be omitted when not required by the LLM provid
 | v1.2.3 | 2026-09-13 | Specified crate for diff recording (rusqlite), added detailed Diff Management functionality description |
 | v1.2.4 | 2026-09-13 | Specified IPC communication method (fetch via reverse proxy), added `notify`, removed LanceDB memory usage descriptions, clarified Function Calling support conditions, added per-project workspace subdirectories, added per-provider API endpoint configuration in config.yml, unified notation (sqlite3 → SQLite), specified streaming performance considerations |
 | v1.2.5 | 2026-09-13 | Implemented all discrepancies between specification and Rust/Tauri implementation: `rig-core` → `rig` notation, `serde_yaml` → `noyalib`, `api_key` → `api_key_env`, real rusqlite diff recording, RAG integration in executor, per-provider endpoint support, project file monitoring with `notify`, diff recording in handlers |
+| v1.2.6 | 2026-09-17 | Added startup synchronization of packaged knowledge resources, recursive resource packaging, configurable knowledge paths, legacy configuration defaults, and bidirectional path-overlap protection |
+
+---
+
+### Summary of Changes (v1.2.5 → v1.2.6)
+
+| Item | Change Description |
+|---|---|
+| **Configuration** | Added top-level `knowledge.path` with legacy YAML defaults |
+| **Startup Sync** | Copy packaged knowledge resources before proxy initialization |
+| **Packaging** | Bundle nested knowledge files with `resources/knowledge_base/**/*` |
+| **Safety** | Reject source/destination overlap in either direction and skip symlinks |
+| **Compatibility** | Preserve empty `ConfigState::default()` while defaulting deserialized knowledge paths |
 
 ---
 

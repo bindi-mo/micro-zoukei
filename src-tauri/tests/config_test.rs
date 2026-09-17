@@ -1,5 +1,6 @@
 use micro_studio_agent_lib::config::{
-    load_config, ChatConfig, ConfigState, LanceConfig, ProjectsConfig, RagConfig,
+    copy_knowledge_files, load_config, ChatConfig, ConfigState, LanceConfig, ProjectsConfig,
+    RagConfig,
 };
 use std::fs;
 use tempfile::TempDir;
@@ -18,6 +19,7 @@ fn config_defaults_are_empty() {
     assert_eq!(config.chat.endpoint, "");
     assert_eq!(config.projects.path, "");
     assert_eq!(config.lancedb.path, "");
+    assert_eq!(config.knowledge.path, "");
 }
 
 /// `ConfigState` should implement `Clone` so it can be shared across threads.
@@ -41,6 +43,9 @@ fn config_clone_preserves_values() {
         },
         lancedb: LanceConfig {
             path: "/home/user/lancedb".to_string(),
+        },
+        knowledge: micro_studio_agent_lib::config::KnowledgeConfig {
+            path: "/home/user/knowledge_base".to_string(),
         },
     };
 
@@ -79,6 +84,8 @@ projects:
   path: /home/user/projects
 lancedb:
   path: /home/user/lancedb
+knowledge:
+  path: /home/user/knowledge_base
 "#,
     )
     .expect("failed to write config.yml");
@@ -96,6 +103,78 @@ lancedb:
     assert_eq!(state.chat.endpoint, "");
     assert_eq!(state.projects.path, "/home/user/projects");
     assert_eq!(state.lancedb.path, "/home/user/lancedb");
+}
+
+#[test]
+fn config_loads_legacy_config_without_knowledge() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    fs::write(
+        temp_dir.path().join("config.yml"),
+        r#"
+rag:
+  provider: ollama
+  model: nomic-embed-text:latest
+  endpoint: "http://localhost:11434/v1"
+chat:
+  provider: ollama
+  model: gemma4:E4B-it-qat-Q4_K_M
+  endpoint: "http://localhost:11434/v1"
+projects:
+  path: /home/user/projects
+lancedb:
+  path: /home/user/lancedb
+"#,
+    )
+    .expect("failed to write legacy config.yml");
+
+    let state = load_config(temp_dir.path().to_path_buf()).expect("failed to load legacy config");
+
+    let expected_knowledge_path = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .expect("HOME should be set")
+        .join(".micro-zoukei/knowledge_base");
+
+    assert_eq!(
+        state.knowledge.path,
+        expected_knowledge_path.to_string_lossy()
+    );
+}
+
+#[test]
+fn config_loads_empty_knowledge_object_with_default_path() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    fs::write(
+        temp_dir.path().join("config.yml"),
+        r#"
+rag:
+  provider: ollama
+  model: nomic-embed-text:latest
+  endpoint: "http://localhost:11434/v1"
+chat:
+  provider: ollama
+  model: gemma4:E4B-it-qat-Q4_K_M
+  endpoint: "http://localhost:11434/v1"
+projects:
+  path: /home/user/projects
+lancedb:
+  path: /home/user/lancedb
+knowledge: {}
+"#,
+    )
+    .expect("failed to write config.yml");
+
+    let state = load_config(temp_dir.path().to_path_buf())
+        .expect("failed to load config with empty knowledge");
+
+    let expected_knowledge_path = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .expect("HOME should be set")
+        .join(".micro-zoukei/knowledge_base");
+
+    assert_eq!(
+        state.knowledge.path,
+        expected_knowledge_path.to_string_lossy()
+    );
 }
 
 /// `load_config` should fall back to `config.yaml` when `config.yml` is absent.
@@ -120,6 +199,8 @@ projects:
   path: /home/user/projects
 lancedb:
   path: /home/user/lancedb
+knowledge:
+  path: /home/user/knowledge_base
 "#,
     )
     .expect("failed to write config.yaml");
@@ -172,6 +253,8 @@ projects:
   path: /home/user/projects
 lancedb:
   path: /home/user/lancedb
+knowledge:
+  path: /home/user/knowledge_base
 "#,
     )
     .expect("failed to write config.yml");
@@ -192,4 +275,97 @@ lancedb:
     );
     assert_eq!(state.projects.path, "/home/user/projects");
     assert_eq!(state.lancedb.path, "/home/user/lancedb");
+}
+
+#[test]
+fn config_load_normalizes_knowledge_path() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let expected_knowledge_path = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .expect("HOME should be set")
+        .join(".micro-zoukei/knowledge_base");
+    fs::write(
+        temp_dir.path().join("config.yml"),
+        r#"
+rag:
+  provider: ollama
+  model: nomic-embed-text:latest
+  endpoint: "http://localhost:11434/v1"
+chat:
+  provider: ollama
+  model: gemma4:E4B-it-qat-Q4_K_M
+  endpoint: "http://localhost:11434/v1"
+projects:
+  path: "$HOME/.micro-zoukei/projects"
+lancedb:
+  path: "$HOME/.micro-zoukei/lancedb"
+knowledge:
+  path: "$HOME/.micro-zoukei/knowledge_base"
+"#,
+    )
+    .expect("failed to write config.yml");
+
+    let state =
+        load_config(temp_dir.path().to_path_buf()).expect("failed to load config from temp dir");
+
+    assert_eq!(
+        state.knowledge.path,
+        expected_knowledge_path.to_string_lossy()
+    );
+}
+
+#[test]
+fn copies_knowledge_files_to_configured_path() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let source = temp_dir.path().join("resource/knowledge_base");
+    let destination = temp_dir.path().join("workspace/knowledge_base");
+    fs::create_dir_all(source.join("nested")).expect("failed to create source directory");
+    fs::write(source.join("root.md"), "root").expect("failed to write root file");
+    fs::write(source.join("nested/child.md"), "child").expect("failed to write child file");
+    fs::write(
+        temp_dir.path().join("config.yml"),
+        format!(
+            r#"
+rag:
+  provider: ollama
+  model: nomic-embed-text:latest
+  endpoint: ""
+chat:
+  provider: ollama
+  model: gemma4:E4B-it-qat-Q4_K_M
+  endpoint: ""
+projects:
+  path: "{}"
+lancedb:
+  path: "{}"
+knowledge:
+  path: "{}"
+"#,
+            temp_dir
+                .path()
+                .join("workspace/projects")
+                .to_string_lossy(),
+            temp_dir
+                .path()
+                .join("workspace/lancedb")
+                .to_string_lossy(),
+            destination.to_string_lossy(),
+        ),
+    )
+    .expect("failed to write config.yml");
+
+    let state =
+        load_config(temp_dir.path().to_path_buf()).expect("failed to load config from temp dir");
+    let copied = copy_knowledge_files(&source, std::path::Path::new(&state.knowledge.path))
+        .expect("knowledge copy should succeed");
+
+    assert_eq!(copied, 2);
+    assert_eq!(
+        fs::read_to_string(destination.join("root.md")).unwrap(),
+        "root"
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("nested/child.md")).unwrap(),
+        "child"
+    );
 }

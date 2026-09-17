@@ -5,6 +5,7 @@ MicroZoukei is a tool that bridges the workspace with `microstudio.dev` through 
 ## Architecture Overview
 
 - **Config**: `ConfigState` loads `template.config.yml` → `$HOME/.micro-zoukei/config.[yml|yaml]`
+- **Knowledge Sync**: Bundled knowledge resources are copied to the configured knowledge path at startup
 - **Agent**: `src-tauri/src/agent/` (rag, executor, tools)
 - **Diff**: `src-tauri/src/diff.rs` + SQLite (`rusqlite`)
 - **Tests**: `src-tauri/tests/`
@@ -13,10 +14,23 @@ MicroZoukei is a tool that bridges the workspace with `microstudio.dev` through 
 ### Configuration State
 
 `ConfigState` is the sole configuration aggregate. It directly owns the `rag`,
-`chat`, `projects`, and `lancedb` sections from the existing YAML schema, without
-a nested `Config` wrapper. Tauri stores an immutable `Arc<ConfigState>` at startup
-and shares it with commands and background workers; path normalization is applied
-once during loading.
+`chat`, `projects`, `lancedb`, and `knowledge` sections from the YAML schema,
+without a nested `Config` wrapper. Tauri stores an immutable `Arc<ConfigState>`
+at startup and shares it with commands and background workers; path
+normalization is applied once during loading. Existing configuration files that
+omit the `knowledge` section or declare `knowledge: {}` automatically use the
+default `$HOME/.micro-zoukei/knowledge_base` path.
+
+### Knowledge Resource Synchronization
+
+At startup, Tauri resolves the bundled `resources/knowledge_base` directory and
+recursively copies its regular files to `config.knowledge.path`, preserving the
+relative directory structure. Files already present at the destination are
+overwritten, while destination-only files are retained. Symlinks are not
+followed, and overlapping source and destination paths are rejected to prevent
+recursive or destructive copies. A missing source or copy failure prevents the
+application from starting, ensuring the RAG knowledge base is never used in an
+unexpected partial state.
 
 ### 1. Proxy Server (`proxy.rs`)
 The proxy acts as the central gateway for all web requests:

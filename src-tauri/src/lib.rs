@@ -39,11 +39,23 @@ pub struct AppState {
 
 impl AppState {
     /// Initialize AppState with config loaded from workspace path
-    pub fn new(workspace_path: PathBuf, template_path: PathBuf) -> Result<Self, String> {
+    pub fn new(
+        workspace_path: PathBuf,
+        template_path: PathBuf,
+        knowledge_path: PathBuf,
+    ) -> Result<Self, String> {
         // Ensure config.yml exists by copying from template.config.yml if needed
         let _ = config::ensure_config_exists(workspace_path.clone(), template_path.clone());
 
         let config_state = std::sync::Arc::new(config::ConfigState::load(workspace_path)?);
+        let knowledge_destination = std::path::PathBuf::from(&config_state.knowledge.path);
+        let copied_count = config::copy_knowledge_files(&knowledge_path, &knowledge_destination)?;
+        println!(
+            "[tauri] Copied {} knowledge files to {}",
+            copied_count,
+            knowledge_destination.display()
+        );
+
         Ok(AppState {
             proxy_port: None,
             config_state,
@@ -265,9 +277,14 @@ pub fn run() {
                         .path()
                         .resolve("template.config.yml", BaseDirectory::Resource)?;
 
+                    let knowledge_path = app
+                        .path()
+                        .resolve("knowledge_base", BaseDirectory::Resource)?;
+
                     // Initialize config state
                     let mut state = APP_STATE.lock().unwrap();
-                    *state = AppState::new(workspace_path.clone(), template_yaml_path)?;
+                    *state =
+                        AppState::new(workspace_path.clone(), template_yaml_path, knowledge_path)?;
                 }
                 Err(e) => {
                     eprintln!("Error: {}", e);

@@ -25,7 +25,7 @@
     ],
     "resources": [
       "resources/template.config.yml",
-      "resources/knowledge_base/*.md"
+      "resources/knowledge_base/**/*"
     ]
   }
 }
