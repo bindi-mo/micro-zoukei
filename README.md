@@ -36,11 +36,11 @@ unexpected partial state.
 
 ### Logger Configuration
 
-Runtime logs use per-module severity thresholds from `config.yml`. The
-supported modules are `frontend`, `tauri`, `proxy`, `agent`, `commands`, and
-`diff`. Each module accepts `off`, `error`, `warn`, `info`, `debug`, or `trace`;
-all modules default to `info` when the section or individual fields are
-omitted.
+Runtime logs use the standard `log` facade with `env_logger` and per-module
+severity thresholds loaded from `config.yml`. The supported targets are
+`frontend`, `tauri`, `proxy`, `agent`, `commands`, and `diff`. Each module
+accepts `off`, `error`, `warn`, `info`, `debug`, or `trace`; omitted modules
+default to `info`.
 
 ```yaml
 logger:
@@ -52,22 +52,27 @@ logger:
   diff: info
 ```
 
-A module emits events at or above its configured threshold. For example,
-`warn` emits `warn` and `error`, while `off` suppresses all events. `info`,
-`debug`, and `trace` are written to stdout; `warn` and `error` are written to
-stderr. Every line uses the format `[MODULE] [LEVEL] message`.
+A module emits records at or above its configured threshold. `off` suppresses
+all records for that module. `config.yml` is the only filter source: the logger
+does not read or merge `RUST_LOG`.
 
-Rust call sites use `log!(LogLevel, ...)`; `module_path!()` automatically
-classifies the caller as `PROXY`, `AGENT`, `COMMANDS`, `DIFF`, or `TAURI` in
-`src-tauri/src/logging.rs`. Frontend-originated records use `frontend_log!`,
-while diff-save failures are logged by `src-tauri/src/diff.rs` so they retain
-their `DIFF` classification.
+After `ConfigState` is committed at startup, `config::init_logger` builds two
+`env_logger` instances with identical module filters. One writes to stdout and
+the other to stderr. The standard `env_logger` formatter is used.
 
-The injected frontend sends explicit records through
-`rpcBridge.logMessage(level, message)`. Rust accepts only lowercase `info`,
-`warn`, and `error`, classifies every accepted record as `FRONTEND`, and rejects
-invalid levels as IPC errors. Suppressed records return successfully. Browser
-console output is not intercepted automatically.
+Rust modules emit through `log::trace!`, `log::debug!`, `log::info!`,
+`log::warn!`, and `log::error!`. Filters use the actual crate prefix
+`micro_studio_agent_lib`; `proxy`, `agent`, and `diff` have their own targets,
+while `commands` and `handlers` share the `commands` threshold. Diff persistence
+failures are emitted from `diff.rs`, so they use the `diff` target.
+
+Frontend records arrive through `rpcBridge.logMessage(level, message)`. Rust
+accepts only lowercase `info`, `warn`, and `error`, emits them with the explicit
+target `frontend`, rejects invalid levels as IPC errors, and returns success for
+suppressed records. Browser console output is not intercepted automatically.
+
+Only `error` records are routed to stderr. `warn`, `info`, `debug`, and `trace`
+records are routed to stdout.
 
 ### 1. Proxy Server (`proxy.rs`)
 The proxy acts as the central gateway for all web requests:

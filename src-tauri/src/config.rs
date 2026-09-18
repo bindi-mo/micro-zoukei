@@ -1,4 +1,3 @@
-use crate::logging::LoggerConfig;
 use noyalib;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -90,6 +89,185 @@ fn normalize_config_paths(
 ) -> Result<ConfigState, String> {
     let home_dir = std::env::var_os("HOME");
     normalize_config_paths_with_home(config, workspace_path, home_dir.as_deref().map(Path::new))
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Off,
+    Error,
+    Warn,
+    #[default]
+    Info,
+    Debug,
+    Trace,
+}
+
+impl From<LogLevel> for log::LevelFilter {
+    fn from(level: LogLevel) -> Self {
+        match level {
+            LogLevel::Off => Self::Off,
+            LogLevel::Error => Self::Error,
+            LogLevel::Warn => Self::Warn,
+            LogLevel::Info => Self::Info,
+            LogLevel::Debug => Self::Debug,
+            LogLevel::Trace => Self::Trace,
+        }
+    }
+}
+
+impl std::fmt::Display for LogLevel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Off => "off",
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+            Self::Debug => "debug",
+            Self::Trace => "trace",
+        })
+    }
+}
+
+impl std::str::FromStr for LogLevel {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "off" => Ok(Self::Off),
+            "error" => Ok(Self::Error),
+            "warn" => Ok(Self::Warn),
+            "info" => Ok(Self::Info),
+            "debug" => Ok(Self::Debug),
+            "trace" => Ok(Self::Trace),
+            _ => Err(format!("Invalid log level: {}", value)),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct LoggerConfig {
+    #[serde(default)]
+    pub frontend: LogLevel,
+    #[serde(default)]
+    pub tauri: LogLevel,
+    #[serde(default)]
+    pub proxy: LogLevel,
+    #[serde(default)]
+    pub agent: LogLevel,
+    #[serde(default)]
+    pub commands: LogLevel,
+    #[serde(default)]
+    pub diff: LogLevel,
+}
+
+impl Default for LoggerConfig {
+    fn default() -> Self {
+        Self {
+            frontend: LogLevel::Info,
+            tauri: LogLevel::Info,
+            proxy: LogLevel::Info,
+            agent: LogLevel::Info,
+            commands: LogLevel::Info,
+            diff: LogLevel::Info,
+        }
+    }
+}
+
+fn target_directives(config: &LoggerConfig) -> Vec<(String, log::LevelFilter)> {
+    let crate_prefix = env!("CARGO_CRATE_NAME");
+    vec![
+        ("frontend".to_string(), config.frontend.into()),
+        (crate_prefix.to_string(), config.tauri.into()),
+        (format!("{crate_prefix}::proxy"), config.proxy.into()),
+        (format!("{crate_prefix}::agent"), config.agent.into()),
+        (format!("{crate_prefix}::commands"), config.commands.into()),
+        (format!("{crate_prefix}::handlers"), config.commands.into()),
+        (format!("{crate_prefix}::diff"), config.diff.into()),
+    ]
+}
+
+fn build_logger(config: &LoggerConfig, output_target: env_logger::Target) -> env_logger::Logger {
+    let mut builder = env_logger::Builder::new();
+    for (target, level) in target_directives(config) {
+        builder.filter_module(&target, level);
+    }
+    builder.target(output_target);
+    builder.build()
+}
+
+fn highest_configured_level(config: &LoggerConfig) -> log::LevelFilter {
+    [
+        config.frontend.into(),
+        config.tauri.into(),
+        config.proxy.into(),
+        config.agent.into(),
+        config.commands.into(),
+        config.diff.into(),
+    ]
+    .into_iter()
+    .filter(|level| *level != log::LevelFilter::Off)
+    .max()
+    .unwrap_or(log::LevelFilter::Off)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputTarget {
+    Stdout,
+    Stderr,
+}
+
+fn output_target_for_level(level: log::Level) -> OutputTarget {
+    if level == log::Level::Error {
+        OutputTarget::Stderr
+    } else {
+        OutputTarget::Stdout
+    }
+}
+
+struct SplitLogger {
+    stdout: env_logger::Logger,
+    stderr: env_logger::Logger,
+}
+
+impl SplitLogger {
+    fn new(stdout: env_logger::Logger, stderr: env_logger::Logger) -> Self {
+        Self { stdout, stderr }
+    }
+
+    fn logger_for_level(&self, level: log::Level) -> &env_logger::Logger {
+        match output_target_for_level(level) {
+            OutputTarget::Stdout => &self.stdout,
+            OutputTarget::Stderr => &self.stderr,
+        }
+    }
+}
+
+impl log::Log for SplitLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        self.logger_for_level(metadata.level()).enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        self.logger_for_level(record.level()).log(record);
+    }
+
+    fn flush(&self) {
+        self.stdout.flush();
+        self.stderr.flush();
+    }
+}
+
+/// Initialize the process-wide logger. Repeated calls are ignored.
+pub fn init_logger(config: LoggerConfig) {
+    let stdout = build_logger(&config, env_logger::Target::Stdout);
+    let stderr = build_logger(&config, env_logger::Target::Stderr);
+    let max_level = highest_configured_level(&config);
+
+    if log::set_boxed_logger(Box::new(SplitLogger::new(stdout, stderr))).is_ok() {
+        log::set_max_level(max_level);
+    }
 }
 
 /// Configuration shared via `Arc<ConfigState>` across Tauri commands and
@@ -292,9 +470,132 @@ pub fn copy_knowledge_files(source: &Path, destination: &Path) -> Result<usize, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use log::Log;
 
     fn test_config() -> ConfigState {
         ConfigState::default()
+    }
+
+    #[test]
+    fn log_levels_convert_to_level_filters() {
+        let cases = [
+            (LogLevel::Off, log::LevelFilter::Off),
+            (LogLevel::Error, log::LevelFilter::Error),
+            (LogLevel::Warn, log::LevelFilter::Warn),
+            (LogLevel::Info, log::LevelFilter::Info),
+            (LogLevel::Debug, log::LevelFilter::Debug),
+            (LogLevel::Trace, log::LevelFilter::Trace),
+        ];
+
+        for (level, expected) in cases {
+            assert_eq!(log::LevelFilter::from(level), expected);
+        }
+    }
+
+    #[test]
+    fn target_directives_use_actual_crate_prefix_and_module_thresholds() {
+        let config = LoggerConfig {
+            frontend: LogLevel::Trace,
+            tauri: LogLevel::Error,
+            proxy: LogLevel::Warn,
+            agent: LogLevel::Info,
+            commands: LogLevel::Debug,
+            diff: LogLevel::Off,
+        };
+        let crate_prefix = env!("CARGO_CRATE_NAME");
+        let directives = target_directives(&config);
+
+        assert_eq!(
+            directives,
+            vec![
+                ("frontend".to_string(), log::LevelFilter::Trace),
+                (crate_prefix.to_string(), log::LevelFilter::Error),
+                (format!("{crate_prefix}::proxy"), log::LevelFilter::Warn,),
+                (format!("{crate_prefix}::agent"), log::LevelFilter::Info,),
+                (format!("{crate_prefix}::commands"), log::LevelFilter::Debug,),
+                (format!("{crate_prefix}::handlers"), log::LevelFilter::Debug,),
+                (format!("{crate_prefix}::diff"), log::LevelFilter::Off),
+            ]
+        );
+        assert_eq!(directives[1].0, crate_prefix);
+        assert!(directives
+            .iter()
+            .skip(2)
+            .all(|(target, _)| { target.starts_with(&format!("{crate_prefix}::")) }));
+
+        let command_directives: Vec<_> = directives
+            .iter()
+            .filter(|(target, _)| target.ends_with("::commands") || target.ends_with("::handlers"))
+            .collect();
+        assert_eq!(command_directives.len(), 2);
+        assert!(command_directives
+            .iter()
+            .all(|(_, level)| *level == log::LevelFilter::Debug));
+    }
+
+    #[test]
+    fn child_logger_filters_by_target_and_level() {
+        let config = LoggerConfig {
+            proxy: LogLevel::Warn,
+            commands: LogLevel::Debug,
+            ..LoggerConfig::default()
+        };
+        let logger = build_logger(&config, env_logger::Target::Stdout);
+        let crate_prefix = env!("CARGO_CRATE_NAME");
+        let proxy_target = format!("{crate_prefix}::proxy::nested");
+        let handler_target = format!("{crate_prefix}::handlers");
+
+        let metadata = log::Metadata::builder()
+            .level(log::Level::Debug)
+            .target(&proxy_target)
+            .build();
+        assert!(!logger.enabled(&metadata));
+
+        let metadata = log::Metadata::builder()
+            .level(log::Level::Warn)
+            .target(&proxy_target)
+            .build();
+        assert!(logger.enabled(&metadata));
+
+        let metadata = log::Metadata::builder()
+            .level(log::Level::Debug)
+            .target(&handler_target)
+            .build();
+        assert!(logger.enabled(&metadata));
+    }
+
+    #[test]
+    fn highest_configured_level_ignores_disabled_modules() {
+        let mut config = LoggerConfig {
+            frontend: LogLevel::Off,
+            tauri: LogLevel::Error,
+            proxy: LogLevel::Off,
+            agent: LogLevel::Trace,
+            commands: LogLevel::Off,
+            diff: LogLevel::Off,
+        };
+        assert_eq!(highest_configured_level(&config), log::LevelFilter::Trace);
+
+        config.tauri = LogLevel::Off;
+        config.agent = LogLevel::Off;
+        assert_eq!(highest_configured_level(&config), log::LevelFilter::Off);
+    }
+
+    #[test]
+    fn error_records_use_stderr_and_other_levels_use_stdout() {
+        assert_eq!(
+            output_target_for_level(log::Level::Error),
+            OutputTarget::Stderr
+        );
+
+        for level in [
+            log::Level::Trace,
+            log::Level::Debug,
+            log::Level::Info,
+            log::Level::Warn,
+        ] {
+            assert_eq!(output_target_for_level(level), OutputTarget::Stdout);
+        }
     }
 
     #[test]

@@ -2,8 +2,6 @@ use crate::handlers::{map_error, CommandPayload, CommandResponse};
 use crate::initial_index::EnsureInitialIndexResponse;
 use serde_json::Value;
 
-use crate::LogLevel;
-
 pub async fn mzd_list_files(path: String) -> Result<serde_json::Value, String> {
     crate::handlers::handle_list_files(path).await
 }
@@ -63,12 +61,7 @@ pub async fn dispatch_command_with_handle(
     app_handle: Option<tauri::AppHandle>,
 ) -> CommandResponse {
     let request_id = uuid::Uuid::new_v4().to_string();
-    crate::log!(
-        LogLevel::Debug,
-        "Request ID: {}, Command: {}",
-        request_id,
-        payload.command
-    );
+    log::debug!("Request ID: {}, Command: {}", request_id, payload.command);
 
     match payload.command.as_str() {
         "mzd_list_files" => map_error(

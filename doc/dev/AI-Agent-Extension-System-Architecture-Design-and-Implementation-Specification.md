@@ -1,4 +1,4 @@
-# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.2.8
+# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.2.9
 
 ## 1. System Overview
 
@@ -28,7 +28,7 @@ Rather than modifying the original source code directly, the system performs tem
 ┌──────────────────────────────▼──────────────────────────────────┐
 │ [ LAYER 2: Backend (Tauri / Rust) ]                             │
 │  ├─ IPC Handler: Routes commands from the frontend              │
-│  ├─ Logger: Automatic caller-module classification and stream routing     │
+│  ├─ Logger: configuration-targeted log/env_logger routing       │
 │  ├─ Knowledge Sync: Copies bundled resources at startup         │
 │  │   └─ Preserves relative paths and rejects path overlap       │
 │  ├─ Workspace Management: $HOME/.micro-zoukei/workspace         │
@@ -90,7 +90,7 @@ Rather than modifying the original source code directly, the system performs tem
 - **Technical Requirements**: Tauri v2, `tokio` (async runtime), `rig` (Function Calling support)
 - **Key Responsibilities**:
   - Load application startup configuration (`config.yml`)
-  - Initialize the path-classified logger after the configuration state is committed
+  - Initialize the standard `log`/`env_logger` router after the configuration state is committed
   - Synchronize bundled knowledge resources before serving requests
   - Route IPC requests from frontend
   - **Workspace Management**:
@@ -188,7 +188,7 @@ started with an incomplete knowledge base. Tauri packages the recursive
 
 ## 5. Data Communication Sequence (Implementation Flow)
 
-1. **Initialization**: Tauri app starts → resolves the packaged `resources/knowledge_base` → reads `config.yml` → normalizes `config.knowledge.path` → recursively copies bundled knowledge files → rejects copy/overlap errors → initializes LanceDB → initializes the logger from `config.logger`
+1. **Initialization**: Tauri app starts → resolves the packaged `resources/knowledge_base` → reads `config.yml` → normalizes `config.knowledge.path` → recursively copies bundled knowledge files → rejects copy/overlap errors → commits `ConfigState` → initializes the `log`/`env_logger` router from `config.logger` → starts the reverse proxy
 2. **Project Loading**: User selects project → writes all files to `$HOME/.micro-zoukei/workspace/{project_name}` → preserves existing files while collecting diffs
 3. **Index Construction**: Document loading → chunking → embedding API → storage in LanceDB
 4. **Prompt Sending**: Enter instruction in chat → sends to backend via reverse proxy using Tauri `fetch`
@@ -205,7 +205,7 @@ started with an incomplete knowledge base. Tauri packages the recursive
 8. **Diff Generation**: Generates diff data before/after changes (records in rusqlite) → responds to frontend
 9. **Diff Review & Approval**: Frontend displays **unified diff + diff2html** → user approves
 10. **Sync Completion**: After approval, force-updates microStudio editor buffers and persists to local files
-11. **Frontend Diagnostics**: Explicit frontend records use `rpcBridge.logMessage(level, message)` → `/api/command` → `mzd_log_message` → Rust classifies them as `FRONTEND`
+11. **Frontend Diagnostics**: Explicit frontend records use `rpcBridge.logMessage(level, message)` → `/api/command` → `mzd_log_message` → Rust emits them with the explicit target `frontend`
 
 ---
 
@@ -214,6 +214,8 @@ started with an incomplete knowledge base. Tauri packages the recursive
 ### Rust Crates
 
 - `tokio` (async runtime)
+- `log` (standard logging facade)
+- `env_logger` (configuration-driven console logger)
 - `reqwest` (HTTP communication: embedding API & LLM API calls)
 - `serde` / `serde_json` / `noyalib` (JSON/YAML parsing)
 - `lancedb` (local vector DB)
@@ -267,15 +269,21 @@ logger:
 
 Each logger module accepts `off`, `error`, `warn`, `info`, `debug`, or `trace`.
 The severity order is `trace < debug < info < warn < error`; a module emits
-events at or above its configured threshold, while `off` suppresses all events.
+records at or above its configured threshold, while `off` suppresses all records.
 Omitting `logger` or individual module fields defaults each module to `info`.
-`info`, `debug`, and `trace` are written to stdout, while `warn` and `error`
-are written to stderr. Output uses `[MODULE] [LEVEL] message`.
+
+`config.yml` is the sole filter source. The logger uses `env_logger::Builder::new()`
+and does not read or merge `RUST_LOG`. It retains `env_logger`'s standard console
+formatter rather than the former custom `[MODULE] [LEVEL] message` format.
 
 The injected frontend sends explicit records through `rpcBridge.logMessage`.
-Rust accepts only lowercase `info`, `warn`, and `error`, forces their module to
-`FRONTEND`, rejects invalid levels as IPC errors, and returns success for
-suppressed records. Browser console output is not intercepted automatically.
+Rust accepts only lowercase `info`, `warn`, and `error`, emits them with the
+explicit target `frontend`, rejects invalid levels as IPC errors, and returns
+success for suppressed records. Browser console output is not intercepted
+automatically.
+
+Only `error` records are routed to stderr. `warn`, `info`, `debug`, and `trace`
+records are routed to stdout.
 
 Omit the `knowledge` section to use the default `<workspace>/knowledge_base`
 path. Specify `knowledge.path` only when a custom destination is required:
@@ -307,43 +315,48 @@ The `api_key_env` field can be omitted when not required by the LLM provider
 | v1.2.6 | 2026-09-17 | Added startup synchronization of packaged knowledge resources, recursive resource packaging, configurable knowledge paths, workspace-scoped configuration defaults, and bidirectional path-overlap protection |
 | v1.2.7 | 2026-09-17 | Added per-module log-level configuration, lazy severity filtering, frontend log IPC classification, stream routing, and logger regression tests |
 | v1.2.8 | 2026-09-17 | Reworked logging to infer Rust modules from `module_path!()`, added frontend-specific logging, and moved diff failure logging into `diff.rs` |
+| v1.2.9 | 2026-09-18 | Replaced the custom logger with `log`/`env_logger`, retained typed module filters, and routed only errors to stderr |
 
 ---
 
 ### Logger Design
 
 The logger is initialized after `AppState` commits the loaded `ConfigState`,
-ensuring that startup diagnostics use the configured thresholds. `LoggerConfig`
-is stored in a process-wide `OnceLock<Arc<LoggerConfig>>`; log emission never
-locks `APP_STATE`.
+ensuring that startup diagnostics use the configured thresholds. The public
+entry point is `config::init_logger(LoggerConfig)`. Repeated initialization is
+idempotent: an already-installed process-global logger is left unchanged.
 
-The supported modules are `FRONTEND`, `TAURI`, `PROXY`, `AGENT`, `COMMANDS`,
-and `DIFF`. `LogLevel` uses explicit severity ranks and rejects uppercase or
-unknown values. Rust call sites use `log!(LogLevel, ...)` without a module
-argument. The macro captures `module_path!()` and classifies the caller from
-its Rust module path; `LogModule` is private to `logging.rs`, and unknown paths
-fall back to `TAURI`.
+`init_logger` converts the typed `LoggerConfig` thresholds into target directives
+and builds two `env_logger::Logger` instances with identical filters. One targets
+stdout and the other stderr. `env_logger::Builder::new()` is used deliberately,
+so `RUST_LOG` is neither read nor merged with application configuration.
 
-Frontend-originated records cannot be inferred from a Rust caller path, so the
-IPC handler uses the separate `frontend_log!` macro and always selects
-`FRONTEND`. Diff persistence failures are emitted from `diff.rs`, ensuring they
-are classified as `DIFF` instead of the command handler's `COMMANDS` module.
+Target mapping uses the actual library crate name from `env!("CARGO_CRATE_NAME")`.
+The `frontend` target is literal; `tauri` maps to the crate root; `proxy`, `agent`,
+and `diff` map to their crate-qualified module prefixes; and both `commands` and
+`handlers` share the `commands` threshold. This preserves module ownership without
+a custom caller-classification macro.
 
-The `log!` macro checks `is_enabled` before evaluating `format_args!`, so
-disabled calls do not allocate or evaluate their message arguments. Rust owns
-all output routing: `warn` and `error` use stderr, while `info`, `debug`, and
-`trace` use stdout.
+A private `SplitLogger` implements the `log::Log` facade over both child loggers.
+Its `enabled`, `log`, and `flush` methods delegate consistently. It selects the
+stderr child only for `log::Level::Error`; every other level uses stdout. The
+global maximum level is the most verbose non-`Off` configured threshold.
+
+Rust call sites use the standard `log::trace!`, `log::debug!`, `log::info!`,
+`log::warn!`, and `log::error!` macros. Frontend IPC records use an explicit
+`target: "frontend"`. Diff persistence failures remain emitted from `diff.rs`,
+so they use the `diff` target rather than the wrapping command handler's target.
 
 ---
 
-### Summary of Changes (v1.2.7 → v1.2.8)
+### Summary of Changes (v1.2.8 → v1.2.9)
 
 | Item | Change Description |
 |---|---|
-| **Logging API** | Removed the module argument from `log!` and infer Rust ownership from `module_path!()` |
-| **Frontend IPC** | Added `frontend_log!` for records whose origin cannot be inferred from a Rust path |
-| **Diff Ownership** | Moved diff-save failure logging into `diff.rs` to preserve `DIFF` classification |
-| **Module Boundary** | Renamed `logger.rs` to `logging.rs` and kept the logger enum private |
+| **Logging API** | Replaced the custom logger and macros with the standard `log` facade and `env_logger` |
+| **Filtering** | Retained typed per-module thresholds and mapped them to actual crate-qualified targets |
+| **Stream Routing** | Routed only `error` records to stderr and all other levels to stdout |
+| **Frontend and Diff Targets** | Emitted frontend IPC explicitly and preserved diff-owned error logging |
 
 ---
 

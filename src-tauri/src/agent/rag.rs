@@ -1,4 +1,3 @@
-use crate::LogLevel;
 use arrow_array::{types::Float64Type, ArrayRef, FixedSizeListArray, RecordBatch, StringArray};
 use arrow_schema::DataType;
 use lancedb;
@@ -35,11 +34,11 @@ async fn handle_rag_reindex(
     .await
     {
         Ok(count) => {
-            crate::log!(LogLevel::Info, "RAG re-index complete: {} documents", count);
+            log::info!("RAG re-index complete: {} documents", count);
             let _ = app_handle.emit("rag-reindexed", count);
         }
         Err(e) => {
-            crate::log!(LogLevel::Error, "RAG re-index failed: {}", e);
+            log::error!("RAG re-index failed: {}", e);
         }
     }
 }
@@ -271,29 +270,21 @@ pub fn spawn_knowledge_watcher(
         }) {
             Ok(w) => w,
             Err(e) => {
-                crate::log!(LogLevel::Error, "Failed to start project watcher: {:?}", e);
+                log::error!("Failed to start project watcher: {:?}", e);
                 return;
             }
         };
 
         if let Err(e) = watcher.configure(Config::default()) {
-            crate::log!(
-                LogLevel::Warn,
-                "Failed to configure project watcher: {:?}",
-                e
-            );
+            log::warn!("Failed to configure project watcher: {:?}", e);
         }
 
         if let Err(e) = watcher.watch(&path, RecursiveMode::Recursive) {
-            crate::log!(
-                LogLevel::Error,
-                "Project watcher failed to watch path: {:?}",
-                e
-            );
+            log::error!("Project watcher failed to watch path: {:?}", e);
             return;
         }
 
-        crate::log!(LogLevel::Info, "Project watcher started on {:?}", path);
+        log::info!("Project watcher started on {:?}", path);
 
         // Debounce: ignore events within 2 seconds of the last re-index
         let mut last_reindex: u64 = 0;
@@ -322,10 +313,7 @@ pub fn spawn_knowledge_watcher(
                     }
                     last_reindex = now;
 
-                    crate::log!(
-                        LogLevel::Info,
-                        "Project file changed, triggering RAG re-index"
-                    );
+                    log::info!("Project file changed, triggering RAG re-index");
 
                     // Spawn async re-indexing task
                     let app_handle_cloned = app_handle.clone();
@@ -340,7 +328,7 @@ pub fn spawn_knowledge_watcher(
                         .await;
                     });
                 }
-                Err(e) => crate::log!(LogLevel::Error, "Project watcher error: {:?}", e),
+                Err(e) => log::error!("Project watcher error: {:?}", e),
             }
         }
     });

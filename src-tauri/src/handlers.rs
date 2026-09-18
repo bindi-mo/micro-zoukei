@@ -6,7 +6,6 @@ use tokio::fs;
 
 use crate::agent::rag::ensure_initial_index;
 use crate::initial_index::{EnsureInitialIndexResponse, InitialIndexStatusEvent};
-use crate::LogLevel;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommandPayload {
@@ -119,14 +118,14 @@ pub async fn handle_delete_file(path: String) -> Result<bool, String> {
 }
 
 pub async fn handle_log_message(level: String, message: String) -> Result<(), String> {
-    let level = match level.as_str() {
-        "info" => LogLevel::Info,
-        "warn" => LogLevel::Warn,
-        "error" => LogLevel::Error,
+    println!("{}", message);
+    match level.as_str() {
+        "info" => log::info!(target: "frontend", "{}", message),
+        "warn" => log::warn!(target: "frontend", "{}", message),
+        "error" => log::error!(target: "frontend", "{}", message),
         _ => return Err(format!("Invalid log level: {}", level)),
     };
 
-    crate::frontend_log!(level, "{}", message);
     Ok(())
 }
 
@@ -154,10 +153,10 @@ pub async fn handle_sync_files(
         state.config_state.projects.path.clone()
     };
     let save_path = std::path::PathBuf::from(&project_path).join(&title);
-    crate::log!(LogLevel::Info, "Sync destination: {}", save_path.display());
+    log::info!("Sync destination: {}", save_path.display());
 
     if files.is_empty() {
-        crate::log!(LogLevel::Info, "There are no files to sync");
+        log::info!("There are no files to sync");
         return Ok(json!({
             "status": "error",
             "files_processed": 0
@@ -181,7 +180,7 @@ pub async fn handle_sync_files(
         let file_path = match file_obj.get("file").and_then(|v| v.as_str()) {
             Some(path) if !path.is_empty() => path,
             _ => {
-                crate::log!(LogLevel::Warn, "Invalid or missing 'file' key");
+                log::warn!("Invalid or missing 'file' key");
                 continue;
             }
         };
@@ -190,7 +189,7 @@ pub async fn handle_sync_files(
         let content_str = match file_obj.get("content").and_then(|v| v.as_str()) {
             Some(c) => c,
             None => {
-                crate::log!(LogLevel::Warn, "No content found for file: {}", file_path);
+                log::warn!("No content found for file: {}", file_path);
                 continue;
             }
         };
@@ -206,12 +205,7 @@ pub async fn handle_sync_files(
             match base64::engine::general_purpose::STANDARD.decode(content_str) {
                 Ok(decoded) => decoded,
                 Err(e) => {
-                    crate::log!(
-                        LogLevel::Warn,
-                        "Failed to decode base64 for {}: {}",
-                        file_path,
-                        e
-                    );
+                    log::warn!("Failed to decode base64 for {}: {}", file_path, e);
                     continue; // If the Base64 is invalid, skip it at this point (without triggering any I/O).
                 }
             }
@@ -234,12 +228,7 @@ pub async fn handle_sync_files(
         // 5. Creating and Writing to Directories (I/O Processing)
         if let Some(parent) = full_path.parent() {
             if let Err(e) = fs::create_dir_all(parent).await {
-                crate::log!(
-                    LogLevel::Error,
-                    "Failed to create parent directory for {}: {}",
-                    file_path,
-                    e
-                );
+                log::error!("Failed to create parent directory for {}: {}", file_path, e);
                 continue;
             }
         }
@@ -247,9 +236,9 @@ pub async fn handle_sync_files(
         match fs::write(&full_path, &bytes).await {
             Ok(_) => {
                 files_processed += 1;
-                crate::log!(LogLevel::Info, "Wrote file: {}", full_path.display());
+                log::info!("Wrote file: {}", full_path.display());
             }
-            Err(e) => crate::log!(LogLevel::Error, "Failed to write file {}: {}", file_path, e),
+            Err(e) => log::error!("Failed to write file {}: {}", file_path, e),
         }
     }
 

@@ -15,8 +15,6 @@ fn resolve_api_key(config_key: &str, default_env: &str) -> Result<String, String
         .map_err(|e| format!("Failed to read {} from environment: {}", env_name, e))
 }
 
-use crate::LogLevel;
-
 /// Run the AI agent with the given prompt.
 ///
 /// When RAG is configured (provider + model + lancedb path are all set),
@@ -41,15 +39,11 @@ pub async fn run_agent(
         .await
         {
             Ok(ctx) => {
-                crate::log!(
-                    LogLevel::Info,
-                    "Retrieved RAG context ({} chars)",
-                    ctx.len()
-                );
+                log::info!("Retrieved RAG context ({} chars)", ctx.len());
                 Some(ctx)
             }
             Err(e) => {
-                crate::log!(LogLevel::Error, "Failed to retrieve RAG context: {}", e);
+                log::error!("Failed to retrieve RAG context: {}", e);
                 None
             }
         }

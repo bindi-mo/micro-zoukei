@@ -23,12 +23,10 @@ pub mod config;
 pub mod diff;
 pub mod handlers;
 pub mod initial_index;
-pub mod logging;
 pub mod network;
 pub mod proxy;
 
 pub use config::ConfigState;
-pub use logging::LogLevel;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -135,11 +133,7 @@ fn injected_js_source_path() -> PathBuf {
 #[cfg(debug_assertions)]
 fn read_injected_script(port: u16) -> Result<String, String> {
     let path = injected_js_source_path();
-    crate::log!(
-        LogLevel::Debug,
-        "Attempting to read injected.js from: {:?}",
-        path
-    );
+    log::debug!("Attempting to read injected.js from: {:?}", path);
 
     match wait_for_write_complete(&path, 5000) {
         Ok(_) => {
@@ -181,19 +175,12 @@ fn inject_updated_script(
     let _ = app_handle_cloned.clone().run_on_main_thread(move || {
         if let Some(window) = app_handle_cloned.get_webview_window("main") {
             if let Err(err) = window.eval(&eval_script) {
-                crate::log!(
-                    crate::LogLevel::Error,
-                    "Injected script reload failed: {:?}",
-                    err
-                );
+                log::error!("Injected script reload failed: {:?}", err);
             } else {
-                crate::log!(crate::LogLevel::Info, "Reloaded injected.js from source");
+                log::info!("Reloaded injected.js from source");
             }
         } else {
-            crate::log!(
-                LogLevel::Warn,
-                "Main window not found for injected script reload"
-            );
+            log::warn!("Main window not found for injected script reload");
         }
     });
 }
@@ -213,29 +200,17 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
         }) {
             Ok(watcher) => watcher,
             Err(err) => {
-                crate::log!(
-                    LogLevel::Error,
-                    "Failed to start injected.js watcher: {:?}",
-                    err
-                );
+                log::error!("Failed to start injected.js watcher: {:?}", err);
                 return;
             }
         };
 
         if let Err(err) = watcher.configure(notify::Config::default()) {
-            crate::log!(
-                LogLevel::Warn,
-                "Failed to configure injected.js watcher: {:?}",
-                err
-            );
+            log::warn!("Failed to configure injected.js watcher: {:?}", err);
         }
 
         if let Err(err) = watcher.watch(&source_path, RecursiveMode::NonRecursive) {
-            crate::log!(
-                LogLevel::Error,
-                "Injected.js watcher failed to watch path: {:?}",
-                err
-            );
+            log::error!("Injected.js watcher failed to watch path: {:?}", err);
             return;
         }
 
@@ -251,8 +226,7 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
 
                         let last_time = *last_reload_time.lock().unwrap();
                         if now - last_time < 300 {
-                            crate::log!(
-                                LogLevel::Debug,
+                            log::debug!(
                                 "Debouncing injected.js reload ({}ms since last reload)",
                                 now - last_time
                             );
@@ -264,16 +238,12 @@ fn spawn_injected_js_watcher(app_handle: tauri::AppHandle, port: u16) {
                                 inject_updated_script(&app_handle, script, last_reload_time.clone())
                             }
                             Err(err) => {
-                                crate::log!(
-                                    LogLevel::Error,
-                                    "Failed to reload injected.js: {:?}",
-                                    err
-                                )
+                                log::error!("Failed to reload injected.js: {:?}", err)
                             }
                         };
                     }
                 }
-                Err(err) => crate::log!(LogLevel::Error, "Injected.js watcher error: {:?}", err),
+                Err(err) => log::error!("Injected.js watcher error: {:?}", err),
             }
         }
     });
@@ -315,13 +285,13 @@ pub fn run() {
                             knowledge_path,
                         )?;
                     }
-                    crate::logging::initialize({
-                        APP_STATE.lock().unwrap().config_state.logger.clone()
-                    });
-                    crate::log!(LogLevel::Info, "Workspace path: {:?}", workspace_path);
+                    crate::config::init_logger(
+                        APP_STATE.lock().unwrap().config_state.logger.clone(),
+                    );
+                    log::info!("Workspace path: {:?}", workspace_path);
                 }
                 Err(e) => {
-                    crate::log!(LogLevel::Error, "Failed to create workspace: {}", e);
+                    log::error!("Failed to create workspace: {}", e);
                 }
             }
 
@@ -332,26 +302,19 @@ pub fn run() {
             match proxy::start_proxy(proxy_cache_dir, Some(app.handle().clone())) {
                 Ok(p) => {
                     port = p;
-                    crate::log!(LogLevel::Info, "Proxy started on port: {}", p);
+                    log::info!("Proxy started on port: {}", p);
                     let mut state = APP_STATE.lock().unwrap();
                     state.proxy_port = Some(p);
                     // Clone port for use in read_injected_script (it doesn't implement Copy)
                     let port_clone = p;
                     let init_script = read_injected_script(port_clone).unwrap_or_else(|_| {
-                        crate::log!(
-                            LogLevel::Error,
-                            "Failed to read injected.js, using empty script"
-                        );
+                        log::error!("Failed to read injected.js, using empty script");
                         String::new()
                     });
 
                     // Navigation URL is now determined by the proxy port from the start, bypassing frontend readiness checks
                     let final_url = format!("http://127.0.0.1:{}/", port);
-                    crate::log!(
-                        LogLevel::Info,
-                        "Initial navigation targeting local proxy: {}",
-                        final_url
-                    );
+                    log::info!("Initial navigation targeting local proxy: {}", final_url);
 
                     WebviewWindowBuilder::new(
                         app,
@@ -368,7 +331,7 @@ pub fn run() {
                     .build()?;
                 }
                 Err(e) => {
-                    crate::log!(LogLevel::Error, "Failed to start proxy: {}", e);
+                    log::error!("Failed to start proxy: {}", e);
                     return Err(std::io::Error::other(e.to_string()).into());
                 }
             }

@@ -18,8 +18,6 @@ use tokio_tungstenite::tungstenite::protocol::Message as TungMessage;
 use warp::ws::Ws;
 use warp::{http::Response as WarpResponse, hyper::StatusCode, Filter};
 
-use crate::LogLevel;
-
 /*
  A function that forces the copying of past localStorage data to
  the new port even if the dynamic port changes
@@ -42,12 +40,7 @@ fn migrate_local_storage(cache_dir: &Path, new_port: u16) {
 
         // Perform the copy operation only if the port number has changed.
         if last_port != new_port_str {
-            crate::log!(
-                LogLevel::Info,
-                "Detected port change: {} -> {}",
-                last_port,
-                new_port_str
-            );
+            log::info!("Detected port change: {} -> {}", last_port, new_port_str);
 
             // List of 3 file extensions to copy
             let extensions = vec![
@@ -65,24 +58,19 @@ fn migrate_local_storage(cache_dir: &Path, new_port: u16) {
 
                     // Copy (duplicate) the entire set of historical data as a new port name
                     if let Err(e) = fs::copy(&old_file_path, &new_file_path) {
-                        crate::log!(LogLevel::Error, "Failed to copy localStorage: {}", e);
+                        log::error!("Failed to copy localStorage: {}", e);
                     } else {
-                        crate::log!(LogLevel::Info, "Copied localStorage file: {}", old_filename);
+                        log::info!("Copied localStorage file: {}", old_filename);
 
                         // Once the copy is complete, delete the old files that are no longer needed.
                         if let Err(e) = fs::remove_file(&old_file_path) {
-                            crate::log!(
-                                LogLevel::Warn,
+                            log::warn!(
                                 "Failed to delete old localStorage file {}: {}",
                                 old_filename,
                                 e
                             );
                         } else {
-                            crate::log!(
-                                LogLevel::Info,
-                                "Deleted old localStorage file: {}",
-                                old_filename
-                            );
+                            log::info!("Deleted old localStorage file: {}", old_filename);
                         }
                     }
                 }
@@ -187,7 +175,7 @@ pub fn start_proxy(
                 if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&s) {
                     let mut store = cookie_store.lock().unwrap();
                     *store = map;
-                    crate::log!(LogLevel::Debug, "Loaded {} cookies from disk", store.len());
+                    log::debug!("Loaded {} cookies from disk", store.len());
                 }
             }
         }
@@ -202,7 +190,7 @@ pub fn start_proxy(
         {
             Ok(r) => r,
             Err(e) => {
-                crate::log!(LogLevel::Error, "Failed to build runtime: {}", e);
+                log::error!("Failed to build runtime: {}", e);
                 let _ = tx.send(0u16);
                 return;
             }
@@ -259,7 +247,7 @@ pub fn start_proxy(
             let (addr, server) = warp::serve(route).bind_ephemeral(([127, 0, 0, 1], 0));
             let port = addr.port();
             let _ = tx.send(port);
-            crate::log!(LogLevel::Info, "Started on http://127.0.0.1:{}", port);
+            log::info!("Started on http://127.0.0.1:{}", port);
 
             server.await;
         });
@@ -306,7 +294,7 @@ fn prune_cache(cache_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error + Se
         let _ = fs::remove_file(&p);
         let _ = fs::remove_file(&meta);
         total = total.saturating_sub(sz);
-        crate::log!(LogLevel::Debug, "Evicted cache file: {}", p.display());
+        log::debug!("Evicted cache file: {}", p.display());
     }
     Ok(())
 }
@@ -387,7 +375,7 @@ self.addEventListener('fetch', (e) => {
 
             // Add some headers to prevent issues with local files
             let response = builder.body(bytes.to_vec());
-            crate::log!(LogLevel::Debug, "Serving local asset: {}", path);
+            log::debug!("Serving local asset: {}", path);
             return Ok(response);
         }
     }
@@ -445,18 +433,14 @@ self.addEventListener('fetch', (e) => {
                     builder = builder.header("content-type", content_type);
                     // return cached body
                     let response = builder.body(bytes);
-                    crate::log!(LogLevel::Debug, "[proxy] cache hit: {}", upstream);
+                    log::debug!("[proxy] cache hit: {}", upstream);
                     return Ok(response);
                 }
             }
         }
     }
 
-    crate::log!(
-        LogLevel::Debug,
-        "[proxy] cache miss, fetching upstream: {}",
-        upstream
-    );
+    log::debug!("[proxy] cache miss, fetching upstream: {}", upstream);
 
     // forward selected headers (user-agent) and include cookies from server-side store
     let client = reqwest::Client::new();
@@ -504,7 +488,7 @@ self.addEventListener('fetch', (e) => {
     let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            crate::log!(LogLevel::Error, "Upstream request failed: {}", e);
+            log::error!("Upstream request failed: {}", e);
             return Ok(WarpResponse::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .body(format!("upstream error: {}", e).into()));
@@ -516,7 +500,7 @@ self.addEventListener('fetch', (e) => {
     let bytes = match resp.bytes().await {
         Ok(b) => b,
         Err(e) => {
-            crate::log!(LogLevel::Error, "Reading upstream body failed: {}", e);
+            log::error!("Reading upstream body failed: {}", e);
             return Ok(WarpResponse::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .body(format!("upstream read error: {}", e).into()));
@@ -552,15 +536,10 @@ self.addEventListener('fetch', (e) => {
             "fetched_at": Utc::now().to_rfc3339(),
         });
         let _ = fs::write(&meta_path, serde_json::to_string(&meta).unwrap_or_default());
-        crate::log!(
-            LogLevel::Debug,
-            "Cached: {} -> {}",
-            upstream,
-            body_path.display()
-        );
+        log::debug!("Cached: {} -> {}", upstream, body_path.display());
         // prune cache if over limit
         if let Err(e) = prune_cache(&cache_dir) {
-            crate::log!(LogLevel::Error, "Cache pruning failed: {}", e);
+            log::error!("Cache pruning failed: {}", e);
         }
     }
 
@@ -577,7 +556,7 @@ self.addEventListener('fetch', (e) => {
                         store.insert(k.clone(), format!("{}={}", k, v));
                         // synthesize a minimal Set-Cookie for the proxy origin so browser stores it
                         synthesized_set_cookie.push(format!("{}={}; Path=/", k, v));
-                        crate::log!(LogLevel::Debug, "Stored cookie: {}", k);
+                        log::debug!("Stored cookie: {}", k);
                         // persist cookie store
                         let cookie_file = cache_dir.join("cookies.json");
                         if let Ok(s) = serde_json::to_string(&*store) {
@@ -632,7 +611,7 @@ async fn handle_ws_upgrade(
     Ok(
         ws.on_upgrade(move |client_ws: warp::ws::WebSocket| async move {
             let headers = headers_cloned;
-            crate::log!(LogLevel::Debug, "WebSocket upgrade requested: {}", upstream);
+            log::debug!("WebSocket upgrade requested: {}", upstream);
             let cookie_header = {
                 let store = cookie_store.lock().unwrap();
                 if store.is_empty() {
@@ -667,12 +646,11 @@ async fn handle_ws_upgrade(
                         }
                     }
 
-                    crate::log!(LogLevel::Debug, "Forwarding headers to upstream");
+                    log::debug!("Forwarding headers to upstream");
 
                     match connect_async(client_req).await {
                         Ok((upstream_ws, resp)) => {
-                            crate::log!(
-                                LogLevel::Debug,
+                            log::debug!(
                                 "WebSocket connected upstream: {} (status: {})",
                                 upstream,
                                 resp.status()
@@ -756,12 +734,12 @@ async fn handle_ws_upgrade(
                             }
                         }
                         Err(e) => {
-                            crate::log!(LogLevel::Error, "WebSocket connect failed: {}", e);
+                            log::error!("WebSocket connect failed: {}", e);
                         }
                     }
                 }
                 Err(e) => {
-                    crate::log!(LogLevel::Error, "WebSocket request creation failed: {}", e);
+                    log::error!("WebSocket request creation failed: {}", e);
                 }
             }
         }),
