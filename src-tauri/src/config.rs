@@ -1,3 +1,4 @@
+use crate::logging::LoggerConfig;
 use noyalib;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -33,96 +34,6 @@ pub struct LanceConfig {
 pub struct KnowledgeConfig {
     #[serde(default)]
     pub path: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Off,
-    Error,
-    Warn,
-    #[default]
-    Info,
-    Debug,
-    Trace,
-}
-
-impl LogLevel {
-    fn severity_rank(self) -> u8 {
-        match self {
-            Self::Trace => 0,
-            Self::Debug => 1,
-            Self::Info => 2,
-            Self::Warn => 3,
-            Self::Error => 4,
-            Self::Off => u8::MAX,
-        }
-    }
-
-    pub fn is_enabled(self, configured_level: LogLevel) -> bool {
-        self != Self::Off
-            && configured_level != Self::Off
-            && self.severity_rank() >= configured_level.severity_rank()
-    }
-}
-
-impl std::fmt::Display for LogLevel {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Off => "off",
-            Self::Error => "error",
-            Self::Warn => "warn",
-            Self::Info => "info",
-            Self::Debug => "debug",
-            Self::Trace => "trace",
-        })
-    }
-}
-
-impl std::str::FromStr for LogLevel {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "off" => Ok(Self::Off),
-            "error" => Ok(Self::Error),
-            "warn" => Ok(Self::Warn),
-            "info" => Ok(Self::Info),
-            "debug" => Ok(Self::Debug),
-            "trace" => Ok(Self::Trace),
-            _ => Err(format!("Invalid log level: {}", value)),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(default)]
-pub struct LoggerConfig {
-    #[serde(default)]
-    pub frontend: LogLevel,
-    #[serde(default)]
-    pub tauri: LogLevel,
-    #[serde(default)]
-    pub proxy: LogLevel,
-    #[serde(default)]
-    pub agent: LogLevel,
-    #[serde(default)]
-    pub commands: LogLevel,
-    #[serde(default)]
-    pub diff: LogLevel,
-}
-
-impl Default for LoggerConfig {
-    fn default() -> Self {
-        Self {
-            frontend: LogLevel::Info,
-            tauri: LogLevel::Info,
-            proxy: LogLevel::Info,
-            agent: LogLevel::Info,
-            commands: LogLevel::Info,
-            diff: LogLevel::Info,
-        }
-    }
 }
 
 fn expand_home_path(path: &str, home_dir: Option<&Path>) -> Result<PathBuf, String> {

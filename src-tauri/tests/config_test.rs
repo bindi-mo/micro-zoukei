@@ -1,6 +1,9 @@
+use micro_studio_agent_lib::logging::{
+  LogLevel, LoggerConfig
+};
 use micro_studio_agent_lib::config::{
-    copy_knowledge_files, load_config, ChatConfig, ConfigState, LanceConfig, LogLevel,
-    LoggerConfig, ProjectsConfig, RagConfig,
+    copy_knowledge_files, load_config, ChatConfig, ConfigState, LanceConfig,
+    ProjectsConfig, RagConfig,
 };
 use std::fs;
 use tempfile::TempDir;

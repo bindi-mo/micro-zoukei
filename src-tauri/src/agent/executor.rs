@@ -15,7 +15,7 @@ fn resolve_api_key(config_key: &str, default_env: &str) -> Result<String, String
         .map_err(|e| format!("Failed to read {} from environment: {}", env_name, e))
 }
 
-use crate::config::LogLevel;
+use crate::LogLevel;
 
 /// Run the AI agent with the given prompt.
 ///

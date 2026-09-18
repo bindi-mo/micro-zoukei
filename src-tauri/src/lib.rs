@@ -1,5 +1,4 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use crate::config::LogLevel;
 
 use std::env;
 use std::fs;
@@ -27,6 +26,7 @@ pub mod network;
 pub mod proxy;
 
 pub use config::ConfigState;
+pub use logging::LogLevel;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 

@@ -4,6 +4,8 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use tokio::fs;
 
+use crate::LogLevel;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommandPayload {
     pub command: String,
@@ -42,8 +44,6 @@ pub fn map_error<T: serde::Serialize>(source: Result<T, String>) -> CommandRespo
         Err(e) => CommandResponse::error(e),
     }
 }
-
-use crate::config::LogLevel;
 
 // Helper to resolve paths
 pub fn resolve_path(path: &str) -> Result<PathBuf, String> {

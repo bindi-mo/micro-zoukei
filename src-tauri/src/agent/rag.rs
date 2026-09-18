@@ -1,3 +1,4 @@
+use crate::LogLevel;
 use arrow_array::{types::Float64Type, ArrayRef, FixedSizeListArray, RecordBatch, StringArray};
 use lancedb;
 #[cfg(debug_assertions)]
@@ -16,8 +17,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use walkdir::WalkDir;
-
-use crate::config::LogLevel;
 
 // Helper function to handle RAG re-indexing
 async fn handle_rag_reindex(

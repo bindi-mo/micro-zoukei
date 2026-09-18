@@ -1,7 +1,7 @@
 use crate::handlers::{map_error, CommandPayload, CommandResponse};
 use serde_json::Value;
 
-use crate::config::LogLevel;
+use crate::LogLevel;
 
 pub async fn mzd_list_files(path: String) -> Result<serde_json::Value, String> {
     crate::handlers::handle_list_files(path).await

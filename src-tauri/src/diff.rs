@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::config::LogLevel;
+use crate::LogLevel;
 
 pub fn init_db(db_path: &PathBuf) -> Result<(), String> {
     let conn = rusqlite::Connection::open(db_path)
