@@ -1,5 +1,6 @@
 use crate::LogLevel;
 use arrow_array::{types::Float64Type, ArrayRef, FixedSizeListArray, RecordBatch, StringArray};
+use arrow_schema::DataType;
 use lancedb;
 #[cfg(debug_assertions)]
 use notify::{recommended_watcher, Config, RecursiveMode, Watcher};
@@ -135,12 +136,17 @@ fn as_record_batch(
     ])
 }
 
+// Check supported source extensions independently of file existence so deletion
+// events remain eligible for re-indexing.
+fn is_supported_source_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("txt") || ext.eq_ignore_ascii_case("md"))
+}
+
 // Check target extension (.txt, .md)
 fn is_target_file(path: &Path) -> bool {
-    path.is_file()
-        && path
-            .extension()
-            .is_some_and(|ext| ext == "txt" || ext == "md")
+    path.is_file() && is_supported_source_path(path)
 }
 
 pub async fn rag_inject_documents(
@@ -153,9 +159,8 @@ pub async fn rag_inject_documents(
 
     let root_dir = Path::new(target_dir);
     let mut documents = Vec::new();
-    let mut id_counter = 1;
 
-    for entry in WalkDir::new(target_dir).into_iter() {
+    for (id_counter, entry) in (1..).zip(WalkDir::new(target_dir)) {
         let entry = entry?;
         let path = entry.path();
         if is_target_file(path) {
@@ -167,7 +172,6 @@ pub async fn rag_inject_documents(
                 text: content,
                 relative_path,
             });
-            id_counter += 1;
         }
     }
 
@@ -297,11 +301,13 @@ pub fn spawn_knowledge_watcher(
         for event in rx {
             match event {
                 Ok(event) => {
-                    // Only react to file creation/modification/deletion
+                    // React to supported source creation, modification, and deletion.
+                    // Deletion paths may no longer exist, so extension filtering is
+                    // intentionally separate from is_target_file().
                     let is_relevant = event
                         .paths
                         .iter()
-                        .any(|p| p.extension().is_some_and(|ext| ext == "txt" || ext == "md"));
+                        .any(|path| is_supported_source_path(path));
                     if !is_relevant {
                         continue;
                     }
@@ -340,9 +346,261 @@ pub fn spawn_knowledge_watcher(
     });
 }
 
+// Schema validation for the my_documents table
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableValidationResult {
+    pub valid: bool,
+    pub document_count: usize,
+    pub error: Option<String>,
+}
+
+/// Validate the my_documents table schema and content
+pub async fn validate_my_documents_table(
+    db_uri: &str,
+    expected_dims: usize,
+) -> Result<TableValidationResult, Box<dyn std::error::Error>> {
+    let db = lancedb::connect(db_uri).execute().await?;
+
+    // Check if table exists
+    let table_names = db.table_names().execute().await?;
+    if !table_names.contains(&"my_documents".to_string()) {
+        return Ok(TableValidationResult {
+            valid: false,
+            document_count: 0,
+            error: Some("Table 'my_documents' does not exist".to_string()),
+        });
+    }
+
+    let table = db.open_table("my_documents").execute().await?;
+
+    // Validate the persisted Arrow schema without mutating the table.
+    let schema = table.schema().await?;
+    let fields = schema.fields();
+
+    // Required fields
+    let required_fields = ["id", "relative_path", "text", "embedding"];
+    for field_name in required_fields {
+        if !fields
+            .iter()
+            .any(|field| field.name().as_str() == field_name)
+        {
+            return Ok(TableValidationResult {
+                valid: false,
+                document_count: 0,
+                error: Some(format!("Missing required field: {}", field_name)),
+            });
+        }
+    }
+
+    // Validate field types
+    for field in fields {
+        match field.name().as_str() {
+            "id" | "relative_path" | "text" => {
+                if !matches!(field.data_type(), DataType::Utf8) {
+                    return Ok(TableValidationResult {
+                        valid: false,
+                        document_count: 0,
+                        error: Some(format!(
+                            "Field '{}' must be UTF-8 string, got {:?}",
+                            field.name(),
+                            field.data_type()
+                        )),
+                    });
+                }
+            }
+            "embedding" => {
+                if let DataType::FixedSizeList(inner_field, list_size) = field.data_type() {
+                    if *list_size as usize != expected_dims {
+                        return Ok(TableValidationResult {
+                            valid: false,
+                            document_count: 0,
+                            error: Some(format!(
+                                "Embedding dimension mismatch: expected {}, got {}",
+                                expected_dims, list_size
+                            )),
+                        });
+                    }
+                    if !matches!(inner_field.data_type(), DataType::Float64) {
+                        return Ok(TableValidationResult {
+                            valid: false,
+                            document_count: 0,
+                            error: Some(format!(
+                                "Embedding inner type must be Float64, got {:?}",
+                                inner_field.data_type()
+                            )),
+                        });
+                    }
+                } else {
+                    return Ok(TableValidationResult {
+                        valid: false,
+                        document_count: 0,
+                        error: Some(format!(
+                            "Embedding field must be FixedSizeList, got {:?}",
+                            field.data_type()
+                        )),
+                    });
+                }
+            }
+            _ => {
+                // Extra columns are allowed for forward compatibility
+            }
+        }
+    }
+
+    // Check row count
+    let count = table.count_rows(None).await? as usize;
+    if count == 0 {
+        return Ok(TableValidationResult {
+            valid: false,
+            document_count: 0,
+            error: Some("Table 'my_documents' has zero rows".to_string()),
+        });
+    }
+
+    Ok(TableValidationResult {
+        valid: true,
+        document_count: count,
+        error: None,
+    })
+}
+
+/// Discover supported source files recursively
+pub fn discover_source_files(target_dir: &str) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let mut files = Vec::new();
+
+    for entry in WalkDir::new(target_dir).into_iter() {
+        let entry = entry?;
+        let path = entry.path();
+        if is_target_file(path) {
+            files.push(path.to_path_buf());
+        }
+    }
+
+    Ok(files)
+}
+
+/// Create document records from source files
+pub fn create_document_records(
+    root_dir: &Path,
+    files: Vec<PathBuf>,
+) -> Result<Vec<DocumentRecord>, Box<dyn std::error::Error>> {
+    let mut documents = Vec::new();
+
+    for (id_counter, path) in (1..).zip(files) {
+        let content = fs::read_to_string(&path)?;
+        let relative_path = knowledge_relative_path(root_dir, &path)?;
+
+        documents.push(DocumentRecord {
+            id: format!("doc_{}", id_counter),
+            text: content,
+            relative_path,
+        });
+    }
+
+    Ok(documents)
+}
+
+/// Build record batch from documents and embeddings
+pub fn build_record_batch(
+    records: Vec<(DocumentRecord, Vec<Embedding>)>,
+    dims: usize,
+) -> Result<RecordBatch, lancedb::arrow::arrow_schema::ArrowError> {
+    as_record_batch(records, dims)
+}
+
+/// Write record batch to my_documents table (replaces existing)
+pub async fn write_my_documents_table(
+    db_uri: &str,
+    record_batch: RecordBatch,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db = lancedb::connect(db_uri).execute().await?;
+    let _ = db.drop_table("my_documents", &[]).await;
+    let _table = db
+        .create_table("my_documents", vec![record_batch])
+        .execute()
+        .await?;
+    Ok(())
+}
+
+/// Non-destructive initial ingestion: only builds if table is absent or invalid
+pub async fn ensure_initial_index(
+    provider: &str,
+    embedding_model_name: &str,
+    target_dir: &str,
+    db_uri: &str,
+) -> Result<TableValidationResult, Box<dyn std::error::Error>> {
+    // First, validate existing table
+    let client_enum = create_llm_client(provider)?;
+    let expected_dims = match &client_enum {
+        SupportedClient::OpenAi(client) => client.embedding_model(embedding_model_name).ndims(),
+        SupportedClient::Ollama(client) => client.embedding_model(embedding_model_name).ndims(),
+        SupportedClient::OpenRouter(client) => client.embedding_model(embedding_model_name).ndims(),
+    };
+
+    let validation = validate_my_documents_table(db_uri, expected_dims).await?;
+    if validation.valid {
+        return Ok(validation);
+    }
+
+    // Table is absent or invalid - discover source files
+    let source_files = discover_source_files(target_dir)?;
+    if source_files.is_empty() {
+        return Ok(TableValidationResult {
+            valid: false,
+            document_count: 0,
+            error: Some(
+                "No supported source documents (.md, .txt) found in knowledge directory"
+                    .to_string(),
+            ),
+        });
+    }
+
+    // Create document records
+    let root_dir = Path::new(target_dir);
+    let documents = create_document_records(root_dir, source_files)?;
+
+    // Generate embeddings
+    let embeddings = match client_enum {
+        SupportedClient::OpenAi(client) => {
+            let model = client.embedding_model(embedding_model_name);
+            EmbeddingsBuilder::new(model.clone())
+                .documents(documents)?
+                .build()
+                .await?
+        }
+        SupportedClient::Ollama(client) => {
+            let model = client.embedding_model(embedding_model_name);
+            EmbeddingsBuilder::new(model.clone())
+                .documents(documents)?
+                .build()
+                .await?
+        }
+        SupportedClient::OpenRouter(client) => {
+            let model = client.embedding_model(embedding_model_name);
+            EmbeddingsBuilder::new(model.clone())
+                .documents(documents)?
+                .build()
+                .await?
+        }
+    };
+
+    // Build record batch
+    let record_batch = build_record_batch(embeddings, expected_dims)?;
+
+    // Write table
+    write_my_documents_table(db_uri, record_batch).await?;
+
+    // Revalidate
+    validate_my_documents_table(db_uri, expected_dims).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::types::Int64Type;
+    use arrow_array::{ArrayRef, FixedSizeListArray, Int64Array, RecordBatch, StringArray};
+    use std::sync::Arc;
+    use tempfile::tempdir;
 
     #[test]
     fn knowledge_relative_path_uses_root_relative_paths() {
@@ -364,6 +622,256 @@ mod tests {
         assert_eq!(
             knowledge_relative_path(root_dir, windows_like).unwrap(),
             "guide/shapes.md"
+        );
+    }
+
+    #[test]
+    fn is_target_file_filters_correctly() {
+        let dir = tempdir().unwrap();
+        let md_file = dir.path().join("test.md");
+        let txt_file = dir.path().join("test.txt");
+        let rs_file = dir.path().join("test.rs");
+        let subdir = dir.path().join("subdir");
+        fs::create_dir_all(&subdir).unwrap();
+        let nested_md = subdir.join("nested.md");
+
+        fs::write(&md_file, "test").unwrap();
+        fs::write(&txt_file, "test").unwrap();
+        fs::write(&rs_file, "test").unwrap();
+        fs::write(&nested_md, "test").unwrap();
+
+        assert!(is_target_file(&md_file));
+        assert!(is_target_file(&txt_file));
+        assert!(!is_target_file(&rs_file));
+        assert!(is_target_file(&nested_md));
+        assert!(!is_target_file(&subdir)); // directory
+    }
+
+    #[test]
+    fn discover_source_files_finds_md_and_txt() {
+        let dir = tempdir().unwrap();
+        let md_file = dir.path().join("test.md");
+        let txt_file = dir.path().join("test.txt");
+        let upper_md_file = dir.path().join("test.MD");
+        let upper_txt_file = dir.path().join("test.TXT");
+        let rs_file = dir.path().join("test.rs");
+        let subdir = dir.path().join("subdir");
+        fs::create_dir_all(&subdir).unwrap();
+        let nested_md = subdir.join("nested.md");
+
+        fs::write(&md_file, "test").unwrap();
+        fs::write(&txt_file, "test").unwrap();
+        fs::write(&upper_md_file, "test").unwrap();
+        fs::write(&upper_txt_file, "test").unwrap();
+        fs::write(&rs_file, "test").unwrap();
+        fs::write(&nested_md, "test").unwrap();
+
+        let files = discover_source_files(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(files.len(), 5);
+        assert!(files.iter().any(|f| f.ends_with("test.md")));
+        assert!(files.iter().any(|f| f.ends_with("test.txt")));
+        assert!(files.iter().any(|f| f.ends_with("test.MD")));
+        assert!(files.iter().any(|f| f.ends_with("test.TXT")));
+        assert!(files.iter().any(|f| f.ends_with("nested.md")));
+        assert!(!files.iter().any(|f| f.ends_with("test.rs")));
+    }
+
+    async fn write_validation_table(db_uri: &str, batch: RecordBatch) {
+        let db = lancedb::connect(db_uri).execute().await.unwrap();
+        let _ = db.drop_table("my_documents", &[]).await;
+        db.create_table("my_documents", vec![batch])
+            .execute()
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn validates_a_non_empty_compatible_table() {
+        let dir = tempdir().unwrap();
+        let db_uri = dir.path().join("db").to_string_lossy().into_owned();
+        let embedding = FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(
+            vec![Some(vec![Some(1.0), Some(2.0)])],
+            2,
+        );
+        let batch = RecordBatch::try_from_iter(vec![
+            ("id", Arc::new(StringArray::from(vec!["1"])) as ArrayRef),
+            (
+                "relative_path",
+                Arc::new(StringArray::from(vec!["one.md"])) as ArrayRef,
+            ),
+            (
+                "text",
+                Arc::new(StringArray::from(vec!["content"])) as ArrayRef,
+            ),
+            ("embedding", Arc::new(embedding) as ArrayRef),
+            (
+                "extra",
+                Arc::new(StringArray::from(vec!["allowed"])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        write_validation_table(&db_uri, batch).await;
+
+        let result = validate_my_documents_table(&db_uri, 2).await.unwrap();
+        assert!(result.valid);
+        assert_eq!(result.document_count, 1);
+        assert!(result.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn rejects_a_table_missing_a_required_column() {
+        let dir = tempdir().unwrap();
+        let db_uri = dir.path().join("db").to_string_lossy().into_owned();
+        let embedding = FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(
+            vec![Some(vec![Some(1.0)])],
+            1,
+        );
+        let batch = RecordBatch::try_from_iter(vec![
+            ("id", Arc::new(StringArray::from(vec!["1"])) as ArrayRef),
+            (
+                "text",
+                Arc::new(StringArray::from(vec!["content"])) as ArrayRef,
+            ),
+            ("embedding", Arc::new(embedding) as ArrayRef),
+        ])
+        .unwrap();
+        write_validation_table(&db_uri, batch).await;
+
+        let result = validate_my_documents_table(&db_uri, 1).await.unwrap();
+        assert!(!result.valid);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Missing required field: relative_path")
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_non_utf8_required_fields() {
+        let dir = tempdir().unwrap();
+        let db_uri = dir.path().join("db").to_string_lossy().into_owned();
+        let embedding = FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(
+            vec![Some(vec![Some(1.0)])],
+            1,
+        );
+        let batch = RecordBatch::try_from_iter(vec![
+            ("id", Arc::new(StringArray::from(vec!["1"])) as ArrayRef),
+            (
+                "relative_path",
+                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            ),
+            (
+                "text",
+                Arc::new(StringArray::from(vec!["content"])) as ArrayRef,
+            ),
+            ("embedding", Arc::new(embedding) as ArrayRef),
+        ])
+        .unwrap();
+        write_validation_table(&db_uri, batch).await;
+
+        let result = validate_my_documents_table(&db_uri, 1).await.unwrap();
+        assert!(!result.valid);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("must be UTF-8 string"));
+    }
+
+    #[tokio::test]
+    async fn rejects_wrong_embedding_element_type() {
+        let dir = tempdir().unwrap();
+        let db_uri = dir.path().join("db").to_string_lossy().into_owned();
+        let embedding = FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(
+            vec![Some(vec![Some(1)])],
+            1,
+        );
+        let batch = RecordBatch::try_from_iter(vec![
+            ("id", Arc::new(StringArray::from(vec!["1"])) as ArrayRef),
+            (
+                "relative_path",
+                Arc::new(StringArray::from(vec!["one.md"])) as ArrayRef,
+            ),
+            (
+                "text",
+                Arc::new(StringArray::from(vec!["content"])) as ArrayRef,
+            ),
+            ("embedding", Arc::new(embedding) as ArrayRef),
+        ])
+        .unwrap();
+        write_validation_table(&db_uri, batch).await;
+
+        let result = validate_my_documents_table(&db_uri, 1).await.unwrap();
+        assert!(!result.valid);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("inner type must be Float64"));
+    }
+
+    #[tokio::test]
+    async fn rejects_wrong_embedding_width() {
+        let dir = tempdir().unwrap();
+        let db_uri = dir.path().join("db").to_string_lossy().into_owned();
+        let embedding = FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(
+            vec![Some(vec![Some(1.0), Some(2.0)])],
+            2,
+        );
+        let batch = RecordBatch::try_from_iter(vec![
+            ("id", Arc::new(StringArray::from(vec!["1"])) as ArrayRef),
+            (
+                "relative_path",
+                Arc::new(StringArray::from(vec!["one.md"])) as ArrayRef,
+            ),
+            (
+                "text",
+                Arc::new(StringArray::from(vec!["content"])) as ArrayRef,
+            ),
+            ("embedding", Arc::new(embedding) as ArrayRef),
+        ])
+        .unwrap();
+        write_validation_table(&db_uri, batch).await;
+
+        let result = validate_my_documents_table(&db_uri, 1).await.unwrap();
+        assert!(!result.valid);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Embedding dimension mismatch"));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_zero_row_table() {
+        let dir = tempdir().unwrap();
+        let db_uri = dir.path().join("db").to_string_lossy().into_owned();
+        let embedding = FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(
+            Vec::<Option<Vec<Option<f64>>>>::new(),
+            2,
+        );
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "id",
+                Arc::new(StringArray::from(Vec::<String>::new())) as ArrayRef,
+            ),
+            (
+                "relative_path",
+                Arc::new(StringArray::from(Vec::<String>::new())) as ArrayRef,
+            ),
+            (
+                "text",
+                Arc::new(StringArray::from(Vec::<String>::new())) as ArrayRef,
+            ),
+            ("embedding", Arc::new(embedding) as ArrayRef),
+        ])
+        .unwrap();
+        write_validation_table(&db_uri, batch).await;
+
+        let result = validate_my_documents_table(&db_uri, 2).await.unwrap();
+        assert!(!result.valid);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Table 'my_documents' has zero rows")
         );
     }
 }

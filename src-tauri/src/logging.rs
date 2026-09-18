@@ -143,16 +143,13 @@ fn configured_level(module: LogModule) -> LogLevel {
 fn module_from_path(module_path: &str) -> LogModule {
     let components: Vec<_> = module_path.split("::").collect();
 
-    if components.iter().any(|component| *component == "proxy") {
+    if components.contains(&"proxy") {
         LogModule::Proxy
-    } else if components.iter().any(|component| *component == "agent") {
+    } else if components.contains(&"agent") {
         LogModule::Agent
-    } else if components
-        .iter()
-        .any(|component| matches!(*component, "commands" | "handlers"))
-    {
+    } else if components.contains(&"commands") || components.contains(&"handlers") {
         LogModule::Commands
-    } else if components.iter().any(|component| *component == "diff") {
+    } else if components.contains(&"diff") {
         LogModule::Diff
     } else {
         LogModule::Tauri

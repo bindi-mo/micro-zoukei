@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
 use std::{fs, time::Duration};
 
-use crate::commands::dispatch_command;
+use crate::commands::dispatch_command_with_handle;
 use crate::handlers::CommandPayload;
 use blake3;
 use chrono::Utc;
@@ -18,7 +18,7 @@ use tokio_tungstenite::tungstenite::protocol::Message as TungMessage;
 use warp::ws::Ws;
 use warp::{http::Response as WarpResponse, hyper::StatusCode, Filter};
 
-use crate::config::LogLevel;
+use crate::LogLevel;
 
 /*
  A function that forces the copying of past localStorage data to
@@ -163,7 +163,10 @@ fn enable_proxy_cache() -> bool {
 
 // Start a local reverse proxy that caches certain responses on disk.
 // Returns the selected port (u16) on success.
-pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
+pub fn start_proxy(
+    cache_dir: PathBuf,
+    app_handle: Option<tauri::AppHandle>,
+) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
     // ensure cache dir exists
     if !cache_dir.exists() {
         fs::create_dir_all(&cache_dir)?;
@@ -209,6 +212,7 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
             // build route inside runtime/thread to avoid cross-runtime issues
             let cache_dir_filter = warp::any().map(move || cd.clone());
             let cookie_store_filter = warp::any().map(move || cs.clone());
+            let app_handle_filter = warp::any().map(move || app_handle.clone());
             // debug status endpoint
             let status_route = warp::path!("__microzoukei_cache_status")
                 .and(cache_dir_filter.clone())
@@ -216,10 +220,13 @@ pub fn start_proxy(cache_dir: PathBuf) -> Result<u16, Box<dyn std::error::Error 
             // New API command route (must be before general HTTP route)
             let api_command_route = warp::path!("api" / "command")
                 .and(warp::body::json())
-                .and_then(|payload: CommandPayload| async move {
-                    let response = dispatch_command(payload).await;
-                    Ok::<_, warp::Rejection>(warp::reply::json(&response))
-                });
+                .and(app_handle_filter.clone())
+                .and_then(
+                    |payload: CommandPayload, app_handle: Option<tauri::AppHandle>| async move {
+                        let response = dispatch_command_with_handle(payload, app_handle).await;
+                        Ok::<_, warp::Rejection>(warp::reply::json(&response))
+                    },
+                );
             // WebSocket route: accept ws upgrades and proxy to upstream wss
             let ws_route = warp::path::full()
                 .and(warp::header::headers_cloned())

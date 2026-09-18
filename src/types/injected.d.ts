@@ -18,6 +18,31 @@ export interface SyncFilesResponse {
 }
 
 /**
+ * Initial index lifecycle response
+ */
+export interface EnsureInitialIndexResponse {
+    status: 'already_valid' | 'in_progress' | 'started';
+    valid: boolean;
+    documentCount: number;
+}
+
+/**
+ * Hot-reload cleanup contract exposed on the window object.
+ */
+export interface MicroZoukeiInjectedState {
+    cleanup: () => void;
+}
+
+/**
+ * Event payload for initial-index-status events
+ */
+export interface InitialIndexStatusEvent {
+    status: 'started' | 'in_progress' | 'completed' | 'failed';
+    documentCount?: number;
+    error?: string;
+}
+
+/**
  * RPC Bridge API exposed to the WebView environment
  */
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'critical';
@@ -43,6 +68,9 @@ export interface MicroZoukeiAPI {
 
     /** Check if the bridge is initialized */
     isReady(): boolean;
+
+    /** Request initial index status */
+    ensureInitialIndex(): Promise<EnsureInitialIndexResponse>;
 }
 
 /**

@@ -3,8 +3,7 @@
  * Handles all command invocations via the local proxy server
  */
 
-import { bridgeReady } from '../injected';
-import type { LogLevel } from '../types/injected';
+import type { EnsureInitialIndexResponse, LogLevel } from '../types/injected';
 import type { FileEntry, MicroZoukeiAPI, ProjectFileItem, SyncFilesResponse } from '../types/injected';
 
 const COMMAND_MAP: Record<string, string> = {
@@ -129,8 +128,14 @@ export const rpcBridge: MicroZoukeiAPI = {
         });
     },
 
+    ensureInitialIndex: async () => {
+        return await fetchCommand({
+            commandName: 'mzd_ensure_initial_index'
+        }) as EnsureInitialIndexResponse;
+    },
+
     isReady: () => {
-        return bridgeReady;
+        return true;
     },
 };
 

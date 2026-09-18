@@ -1,5 +1,14 @@
 /// <reference types="vite/client" />
 
+import type { MicroZoukeiAPI, MicroZoukeiInjectedState } from './types/injected';
+
+declare global {
+    interface Window {
+        microZoukei?: MicroZoukeiAPI;
+        microZoukeiInjectedState?: MicroZoukeiInjectedState;
+    }
+}
+
 // Tauri window API declarations for TypeScript
 declare global {
     interface Window {

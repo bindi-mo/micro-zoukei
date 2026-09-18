@@ -83,6 +83,9 @@ All interactions with your local filesystem or project state are encapsulated in
 ### 3. Frontend Integration
 The frontend component is minimized. Primary interaction occurs through the injected bridge, allowing for a smooth experience that feels like it's running natively on `microstudio.dev` while maintaining deep integration with your local workspace.
 
+### 4. Initial RAG Index Lifecycle
+When the user navigates to `/projects/`, the frontend requests an idempotent initial index through the `mzd_ensure_initial_index` RPC command. The Rust backend validates the existing `my_documents` LanceDB table (schema, UTF-8 text fields, fixed-size embedding list, and nonzero row count) and rebuilds it only when it is missing or invalid. Lifecycle state is tracked by `InitialIndexManager` (`idle`, `in_progress`, `complete`, `failed`) and surfaced through typed `initial-index-status` Tauri events (`started`, `in_progress`, `completed`, `failed`). A blocking, accessible modal (`role="alertdialog"`, `aria-modal`, focus trap, Escape/wheel/touch blocking) covers the WebView while indexing. After a successful index, the debug knowledge watcher starts exactly once and reacts to supported-file deletion even when the path no longer exists. Hot reload calls `window.microZoukeiInjectedState.cleanup()` to tear down the lifecycle, restore navigation hooks, and hide the modal.
+
 ## Getting Started
 
 To build and run the project:

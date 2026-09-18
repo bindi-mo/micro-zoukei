@@ -5,97 +5,115 @@
 
 // Proxy port number embedded at boot time (injected by Tauri)
 const PROXY_PORT = 8080;
-export let bridgeReady: boolean = false;
 
 import { hideAllErrors, showError } from './components/error-handler';
-import { hideLoading, isLoadingDisplayed, showLoading } from './components/loading';
 import { checkBridgeHealth, rpcBridge } from './components/rpc-bridge';
+import {
+    cleanupInitialIndexLifecycle,
+} from './components/initial-index';
 import { initializeAppExtension } from './components/uiex-initializer';
-import type { MicroZoukeiAPI } from './types/injected';
+import type { MicroZoukeiAPI, MicroZoukeiInjectedState } from './types/injected';
+
+let activeCleanup: (() => void) | null = null;
+let initializationToken = 0;
+let pendingInitializationTimeout: ReturnType<typeof setTimeout> | undefined;
+
+const clearPendingInitialization = (): void => {
+    if (pendingInitializationTimeout !== undefined) {
+        clearTimeout(pendingInitializationTimeout);
+        pendingInitializationTimeout = undefined;
+    }
+};
+
+const waitForMicroStudioLoad = (token: number): Promise<void> => {
+    return new Promise(resolve => {
+        const check = (): void => {
+            if (token !== initializationToken) {
+                return;
+            }
+
+            if ((window as any).app?.appui?.setMainSection) {
+                resolve();
+                return;
+            }
+
+            pendingInitializationTimeout = setTimeout(check, 100);
+        };
+
+        check();
+    });
+};
 
 /**
- * Cleanup function called when the injected script needs to be reloaded.
+ * Clean up all state owned by the currently injected script.
  */
 export const cleanupInjectedScript = (): void => {
+    initializationToken += 1;
+    clearPendingInitialization();
+
     hideAllErrors();
 
-    // Remove microZoukei from window if it exists
     if ((window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei) {
         delete (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei;
     }
-}
 
-/**
- * Utility function to show loading while performing async operations.
- */
-export async function withLoading<T>(
-    operation: () => Promise<T>,
-    message?: string
-): Promise<T> {
-    if (!isLoadingDisplayed()) {
-        showLoading({ message });
+    if (activeCleanup) {
+        const cleanup = activeCleanup;
+        activeCleanup = null;
+        cleanup();
     }
 
-    try {
-        const result = await operation();
-        return result;
-    } finally {
-        hideLoading();
-    }
-}
-
-/**
- * A function that safely waits for the microStudio
- * main application (window.app) to launch and performs
- * initialization the moment it starts up
- */
-const waitForMicroStudioLoad = (): void => {
-    const isLoaded = (window as any).app && (window as any).app.appui;
-
-    if (isLoaded) {
-        console.log('🎯 I have confirmed that microStudio has started. I will now begin extending the UI.');
-
-        setTimeout(() => {
-            initializeAppExtension();
-        }, 100);
-
-        return;
-    }
-
-    // If it hasn't started yet, check again during the browser's next
-    // rendering frame (using a safe timer that prevents an infinite loop).
-    requestAnimationFrame(waitForMicroStudioLoad);
+    cleanupInitialIndexLifecycle();
+    delete (window as unknown as { microZoukeiInjectedState?: MicroZoukeiInjectedState }).microZoukeiInjectedState;
 };
 
-// Auto-initialize when script is injected via inject_updated_script()
-if (typeof window !== 'undefined') {
-    console.log('[MicroZoukei] Injected script loaded and executing');
-    cleanupInjectedScript();
+/**
+ * Expose the RPC bridge and initialize the injected UI after microStudio is ready.
+ */
+const initializeInjectedScript = async (): Promise<void> => {
+    const token = ++initializationToken;
 
-    // Expose PROXY_PORT to window for RPC bridge to use directly
+    // Expose cleanup immediately so hot reload can stop this script before replacement.
+    (window as unknown as { microZoukeiInjectedState?: MicroZoukeiInjectedState }).microZoukeiInjectedState = {
+        cleanup: cleanupInjectedScript,
+    };
     (window as any).PROXY_PORT = PROXY_PORT;
 
-    void checkBridgeHealth().then((ready: boolean) => {
-        bridgeReady = ready;
-
-        if (bridgeReady) {
-            // Expose RPC bridge to window object
-            (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei = rpcBridge;
-
-            rpcBridge.logMessage('info', '[MicroZoukei] RPC Bridge initialized and ready');
-
-            // ----------------------------------------------------
-            // Initalize UI extention
-            // ----------------------------------------------------
-            waitForMicroStudioLoad();
-
-        } else {
-            showError({
-                message: 'Tauri API not available. Please ensure the app is running.',
-                showDetails: true,
-            });
-
-            console.warn('[MicroZoukei] Tauri API not yet available. Will initialize when injected.');
+    try {
+        const ready = await checkBridgeHealth();
+        if (!ready || token !== initializationToken) {
+            return;
         }
-    });
+
+        (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei = rpcBridge;
+        rpcBridge.logMessage('info', '[MicroZoukei] RPC Bridge initialized and ready');
+
+        await waitForMicroStudioLoad(token);
+        if (token !== initializationToken) {
+            return;
+        }
+
+        const cleanup = await initializeAppExtension();
+        if (token !== initializationToken) {
+            cleanup();
+            return;
+        }
+
+        activeCleanup = cleanup;
+    } catch (error) {
+        if (token !== initializationToken) {
+            return;
+        }
+
+        const message = error instanceof Error ? error.message : 'Unknown initialization error';
+        showError({
+            message: `MicroZoukei initialization failed: ${message}`,
+            showDetails: true,
+        });
+    }
+};
+
+if (typeof window !== 'undefined') {
+    console.log('[MicroZoukei] Injected script loaded and executing');
+    void initializeInjectedScript();
 }

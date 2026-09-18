@@ -1,11 +1,19 @@
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { setupAgentChatWindow } from './agent-window';
+import {
+    cleanupInitialIndexLifecycle,
+    requestInitialIndexForProjectsRoute,
+    startInitialIndexEventListening,
+} from './initial-index';
 import { overrideProjectLoaded } from './project-files';
 
 let flag_morespace = false;
 let elm = null;
 let morespace_icon: HTMLElement = document.createElement("i");
 let cachedCodeEditor: HTMLElement | null = null;
+let createdMoreSpaceIcon = false;
+let initializeAppExtensionCleanup: (() => void) | null = null;
+let initializationGeneration = 0;
 
 // ---------------------------------------------------
 // function
@@ -327,6 +335,50 @@ const overrideSetSection = (appui: any): void => {
     };
 }
 
+let originalSetMainSection: ((section: string, ...args: any[]) => any) | null = null;
+let wrappedSetMainSection: ((section: string, ...args: any[]) => any) | null = null;
+
+const restoreSetMainSectionOverride = (): void => {
+    const appui = (window as any).app?.appui;
+    if (
+        appui?.setMainSection === wrappedSetMainSection &&
+        originalSetMainSection
+    ) {
+        appui.setMainSection = originalSetMainSection;
+    }
+
+    originalSetMainSection = null;
+    wrappedSetMainSection = null;
+};
+
+const overrideSetMainSection = (appui: any): (() => void) => {
+    if (!appui || typeof appui.setMainSection !== 'function') {
+        console.error('Not found appui.setMainSection function');
+        return () => undefined;
+    }
+
+    if (appui.setMainSection === wrappedSetMainSection) {
+        return restoreSetMainSectionOverride;
+    }
+
+    const originalSetMainSectionRef = appui.setMainSection;
+    const wrappedSetMainSectionRef = function (this: any, section: string, ...args: any[]) {
+        const result = originalSetMainSectionRef.apply(this, [section, ...args]);
+
+        if (section === "projects") {
+            void requestInitialIndexForProjectsRoute();
+        }
+
+        return result;
+    };
+
+    originalSetMainSection = originalSetMainSectionRef;
+    wrappedSetMainSection = wrappedSetMainSectionRef;
+    appui.setMainSection = wrappedSetMainSectionRef;
+
+    return restoreSetMainSectionOverride;
+}
+
 const injectRequiredStyles = (): void => {
     const style = document.createElement('style');
     style.textContent = `
@@ -350,11 +402,24 @@ const injectRequiredStyles = (): void => {
     document.head.appendChild(style);
 }
 
+const normalizePathname = (pathname: string): string => {
+    const normalized = pathname.trim();
+    const withLeadingSlash = normalized.startsWith('/') ? normalized : `/${normalized}`;
+    return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`;
+};
+
+const isProjectsRoute = (): boolean => normalizePathname(window.location.pathname) === '/projects/';
+
 /**
- * The main function that runs only once when the page
- * loads and expands the screen
+ * Initialize the injected UI extensions and the initial-index lifecycle.
  */
-export const initializeAppExtension = (): void => {
+export const initializeAppExtension = async (): Promise<() => void> => {
+    initializeAppExtensionCleanup?.();
+    const generation = ++initializationGeneration;
+
+    // Install lifecycle events before any navigation hook can trigger a request.
+    await startInitialIndexEventListening();
+
     // -------------------------------------------
     // step 1: remove
     // -------------------------------------------
@@ -376,6 +441,7 @@ export const initializeAppExtension = (): void => {
         elm = document.getElementById('project-icon');
         if (elm && elm instanceof HTMLElement) {
             elm.after(morespace_icon);
+            createdMoreSpaceIcon = true;
         }
     }
 
@@ -411,4 +477,37 @@ export const initializeAppExtension = (): void => {
     setupAgentChatWindow();
 
     overrideProjectLoaded();
+
+    let restoreSetMainSection: (() => void) | null = null;
+    if (targetAppUi && typeof targetAppUi.setMainSection === 'function') {
+        restoreSetMainSection = overrideSetMainSection(targetAppUi);
+    }
+
+    if (isProjectsRoute()) {
+        void requestInitialIndexForProjectsRoute();
+    }
+
+    const cleanup = (): void => {
+        if (generation !== initializationGeneration) {
+            return;
+        }
+
+        restoreSetMainSection?.();
+        cleanupInitialIndexLifecycle();
+
+        if (createdMoreSpaceIcon && morespace_icon.isConnected) {
+            morespace_icon.remove();
+        }
+        if (createdMoreSpaceIcon) {
+            morespace_icon.onclick = null;
+        }
+        if (createdMoreSpaceIcon) {
+            flag_morespace = false;
+        }
+        createdMoreSpaceIcon = false;
+        initializeAppExtensionCleanup = null;
+    };
+
+    initializeAppExtensionCleanup = cleanup;
+    return cleanup;
 }

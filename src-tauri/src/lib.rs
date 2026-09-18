@@ -1,4 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+use crate::initial_index::InitialIndexManager;
 
 use std::env;
 use std::fs;
@@ -21,6 +22,7 @@ pub mod commands;
 pub mod config;
 pub mod diff;
 pub mod handlers;
+pub mod initial_index;
 pub mod logging;
 pub mod network;
 pub mod proxy;
@@ -38,6 +40,7 @@ pub static APP_STATE: LazyLock<Arc<Mutex<AppState>>> =
 pub struct AppState {
     proxy_port: Option<u16>,
     config_state: std::sync::Arc<config::ConfigState>,
+    initial_index_manager: InitialIndexManager,
 }
 
 impl AppState {
@@ -57,6 +60,7 @@ impl AppState {
         Ok(AppState {
             proxy_port: None,
             config_state,
+            initial_index_manager: InitialIndexManager::new(),
         })
     }
 }
@@ -177,9 +181,13 @@ fn inject_updated_script(
     let _ = app_handle_cloned.clone().run_on_main_thread(move || {
         if let Some(window) = app_handle_cloned.get_webview_window("main") {
             if let Err(err) = window.eval(&eval_script) {
-                crate::log!(LogLevel::Error, "Injected script reload failed: {:?}", err);
+                crate::log!(
+                    crate::LogLevel::Error,
+                    "Injected script reload failed: {:?}",
+                    err
+                );
             } else {
-                crate::log!(LogLevel::Info, "Reloaded injected.js from source");
+                crate::log!(crate::LogLevel::Info, "Reloaded injected.js from source");
             }
         } else {
             crate::log!(
@@ -321,7 +329,7 @@ pub fn run() {
             let cache_dir = webview_cache_dir(app.handle());
             let proxy_cache_dir = cache_dir.clone();
             let port: u16;
-            match proxy::start_proxy(proxy_cache_dir) {
+            match proxy::start_proxy(proxy_cache_dir, Some(app.handle().clone())) {
                 Ok(p) => {
                     port = p;
                     crate::log!(LogLevel::Info, "Proxy started on port: {}", p);

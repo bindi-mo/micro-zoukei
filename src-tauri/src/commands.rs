@@ -1,4 +1,5 @@
 use crate::handlers::{map_error, CommandPayload, CommandResponse};
+use crate::initial_index::EnsureInitialIndexResponse;
 use serde_json::Value;
 
 use crate::LogLevel;
@@ -45,8 +46,22 @@ pub async fn mzd_run_agent(prompt: String) -> Result<String, String> {
     crate::handlers::handle_run_agent(prompt).await
 }
 
-// Dispatcher function - handles incoming HTTP requests from the frontend
+#[tauri::command]
+pub async fn mzd_ensure_initial_index() -> Result<EnsureInitialIndexResponse, String> {
+    // This command requires proxy context; callers should use the proxy-wrapped variant
+    Err("mzd_ensure_initial_index requires proxy context with an AppHandle".to_string())
+}
+
+// Dispatcher function - handles incoming HTTP requests from the frontend (without AppHandle)
 pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
+    dispatch_command_with_handle(payload, None).await
+}
+
+// Dispatcher function with optional AppHandle for event emission
+pub async fn dispatch_command_with_handle(
+    payload: CommandPayload,
+    app_handle: Option<tauri::AppHandle>,
+) -> CommandResponse {
     let request_id = uuid::Uuid::new_v4().to_string();
     crate::log!(
         LogLevel::Debug,
@@ -154,6 +169,9 @@ pub async fn dispatch_command(payload: CommandPayload) -> CommandResponse {
             )
             .await,
         ),
+        "mzd_ensure_initial_index" => {
+            map_error(crate::handlers::handle_ensure_initial_index(app_handle).await)
+        }
         _ => CommandResponse::error(format!("Unknown command: {}", payload.command)),
     }
 }

@@ -4,6 +4,8 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use tokio::fs;
 
+use crate::agent::rag::ensure_initial_index;
+use crate::initial_index::{EnsureInitialIndexResponse, InitialIndexStatusEvent};
 use crate::LogLevel;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -255,4 +257,138 @@ pub async fn handle_sync_files(
         "status": "success",
         "files_processed": files_processed
     }))
+}
+
+pub async fn handle_ensure_initial_index(
+    app_handle: Option<tauri::AppHandle>,
+) -> Result<EnsureInitialIndexResponse, String> {
+    let (config_state, initial_index_manager) = {
+        let state = crate::APP_STATE.lock().unwrap();
+        (
+            state.config_state.clone(),
+            state.initial_index_manager.clone(),
+        )
+    };
+
+    // Check current status
+    let current_status = initial_index_manager.get_status();
+    let document_count = initial_index_manager.get_document_count();
+
+    match current_status {
+        crate::initial_index::InitialIndexStatus::Complete => {
+            return Ok(EnsureInitialIndexResponse {
+                status: "already_valid".to_string(),
+                valid: true,
+                document_count,
+            });
+        }
+        crate::initial_index::InitialIndexStatus::InProgress => {
+            return Ok(EnsureInitialIndexResponse {
+                status: "in_progress".to_string(),
+                valid: false,
+                document_count,
+            });
+        }
+        crate::initial_index::InitialIndexStatus::Failed => {
+            // Allow retry on failure
+            initial_index_manager.reset();
+        }
+        crate::initial_index::InitialIndexStatus::Idle => {
+            // Continue to start indexing
+        }
+    }
+
+    // Start indexing. The atomic state transition prevents concurrent jobs.
+    if !initial_index_manager.try_start_indexing() {
+        return Ok(EnsureInitialIndexResponse {
+            status: "in_progress".to_string(),
+            valid: false,
+            document_count,
+        });
+    }
+
+    // Emit started event if we have an app handle
+    if let Some(ref app) = app_handle {
+        initial_index_manager.emit_status_event(
+            app,
+            InitialIndexStatusEvent {
+                status: "started".to_string(),
+                document_count: None,
+                error: None,
+            },
+        );
+    }
+
+    // Spawn the indexing task
+    let provider = config_state.rag.provider.clone();
+    let model = config_state.rag.model.clone();
+    let knowledge_path = config_state.knowledge.path.clone();
+    let db_path = config_state.lancedb.path.clone();
+    let manager = initial_index_manager.clone();
+    let app_handle_clone = app_handle.clone();
+
+    tokio::spawn(async move {
+        match ensure_initial_index(&provider, &model, &knowledge_path, &db_path).await {
+            Ok(result) => {
+                if result.valid {
+                    manager.complete_indexing(result.document_count);
+                    #[cfg(debug_assertions)]
+                    if manager.mark_watcher_started() {
+                        if let Some(ref app) = app_handle_clone {
+                            crate::agent::rag::spawn_knowledge_watcher(
+                                app.clone(),
+                                config_state.knowledge.path.clone().into(),
+                                config_state.clone(),
+                            );
+                        }
+                    }
+                    if let Some(ref app) = app_handle_clone {
+                        manager.emit_status_event(
+                            app,
+                            InitialIndexStatusEvent {
+                                status: "completed".to_string(),
+                                document_count: Some(result.document_count),
+                                error: None,
+                            },
+                        );
+                    }
+                } else {
+                    let error_msg = result
+                        .error
+                        .unwrap_or_else(|| "Unknown validation error".to_string());
+                    manager.fail_indexing(error_msg.clone());
+                    if let Some(ref app) = app_handle_clone {
+                        manager.emit_status_event(
+                            app,
+                            InitialIndexStatusEvent {
+                                status: "failed".to_string(),
+                                document_count: None,
+                                error: Some(error_msg),
+                            },
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                manager.fail_indexing(error_msg.clone());
+                if let Some(ref app) = app_handle_clone {
+                    manager.emit_status_event(
+                        app,
+                        InitialIndexStatusEvent {
+                            status: "failed".to_string(),
+                            document_count: None,
+                            error: Some(error_msg),
+                        },
+                    );
+                }
+            }
+        }
+    });
+
+    Ok(EnsureInitialIndexResponse {
+        status: "started".to_string(),
+        valid: false,
+        document_count: 0,
+    })
 }

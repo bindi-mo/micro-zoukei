@@ -85,8 +85,13 @@ var InjectedScript = (function(exports) {
         args: { level, message }
       });
     },
+    ensureInitialIndex: async () => {
+      return await fetchCommand({
+        commandName: "mzd_ensure_initial_index"
+      });
+    },
     isReady: () => {
-      return exports.bridgeReady;
+      return true;
     }
   };
   async function checkBridgeHealth() {
@@ -97,7 +102,7 @@ var InjectedScript = (function(exports) {
       return false;
     }
   }
-  const DEFAULT_CONTAINER$1 = "body";
+  const DEFAULT_CONTAINER = "body";
   const ERROR_CLASS = "micro-zoukei-error";
   const ERROR_STYLE = `
     .${ERROR_CLASS} {
@@ -129,7 +134,7 @@ var InjectedScript = (function(exports) {
     }
 `;
   function showError(options) {
-    const container = options?.container || document.querySelector(DEFAULT_CONTAINER$1);
+    const container = options?.container || document.querySelector(DEFAULT_CONTAINER);
     const existingStyle = document.getElementById("micro-zoukei-error-style");
     if (!existingStyle) {
       const styleSheet = document.createElement("style");
@@ -139,11 +144,13 @@ var InjectedScript = (function(exports) {
     }
     const errorDiv = document.createElement("div");
     errorDiv.className = ERROR_CLASS;
-    {
+    if (options.showDetails) {
       errorDiv.innerHTML = `
             <strong>Error:</strong> ${escapeHtml(options.message)}
             <button onclick="this.parentElement.remove()">Dismiss</button>
         `;
+    } else {
+      errorDiv.innerHTML = `<strong>Error:</strong> ${escapeHtml(options.message)}<button onclick="this.parentElement.remove()">×</button>`;
     }
     if (container) {
       container.appendChild(errorDiv);
@@ -160,83 +167,6 @@ var InjectedScript = (function(exports) {
     const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
-  }
-  const DEFAULT_CONTAINER = "body";
-  const LOADING_CLASS = "micro-zoukei-loading";
-  const SPINNER_STYLE = `
-    .${LOADING_CLASS}::after {
-        content: '';
-        display: inline-block;
-        width: 40px;
-        height: 40px;
-        border: 3px solid #374151;
-        border-radius: 50%;
-        border-top-color: #60a5fa;
-        animation: spin 0.8s linear infinite;
-    }
-
-    @keyframes spin {
-        to { transform: rotate(360deg); }
-    }
-`;
-  const CUSTOM_STYLE = `
-    .${LOADING_CLASS} {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background-color: rgba(15, 23, 42, 0.8);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 999999;
-    }
-
-    .${LOADING_CLASS} > div {
-        text-align: center;
-        color: #e5e7eb;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    }
-`;
-  function showLoading(options) {
-    const container = options?.container || document.querySelector(DEFAULT_CONTAINER);
-    if (!container) return;
-    if (document.body.classList.contains(LOADING_CLASS)) {
-      rpcBridge.logMessage("info", "[MicroZoukei] Loading already visible");
-      return;
-    }
-    const existingStyle = document.getElementById("micro-zoukei-loading-style");
-    if (!existingStyle) {
-      const styleSheet = document.createElement("style");
-      styleSheet.id = "micro-zoukei-loading-style";
-      styleSheet.textContent = SPINNER_STYLE + CUSTOM_STYLE;
-      document.head.appendChild(styleSheet);
-    }
-    const loadingDiv = document.createElement("div");
-    loadingDiv.className = LOADING_CLASS;
-    if (options?.message) {
-      loadingDiv.innerHTML = `
-            <div>
-                ${options.showSpinner !== false ? '<span class="spinner"></span>' : ""}
-                <p>${options.message || "Loading..."}</p>
-            </div>
-        `;
-    } else if (options?.showSpinner === false) {
-      loadingDiv.innerHTML = `<p>Loading...</p>`;
-    }
-    container.appendChild(loadingDiv);
-    rpcBridge.logMessage("info", "[MicroZoukei] Loading indicator shown");
-  }
-  function hideLoading() {
-    const loadingElement = document.querySelector(`.${LOADING_CLASS}`);
-    if (loadingElement) {
-      loadingElement.remove();
-      rpcBridge.logMessage("info", "[MicroZoukei] Loading indicator hidden");
-    }
-  }
-  function isLoadingDisplayed() {
-    return document.body.classList.contains(LOADING_CLASS);
   }
   function __classPrivateFieldGet(receiver, state, kind, f) {
     if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
@@ -277,6 +207,371 @@ var InjectedScript = (function(exports) {
     }
   }
   _Resource_rid = /* @__PURE__ */ new WeakMap();
+  var TauriEvent;
+  (function(TauriEvent2) {
+    TauriEvent2["WINDOW_RESIZED"] = "tauri://resize";
+    TauriEvent2["WINDOW_MOVED"] = "tauri://move";
+    TauriEvent2["WINDOW_CLOSE_REQUESTED"] = "tauri://close-requested";
+    TauriEvent2["WINDOW_DESTROYED"] = "tauri://destroyed";
+    TauriEvent2["WINDOW_FOCUS"] = "tauri://focus";
+    TauriEvent2["WINDOW_BLUR"] = "tauri://blur";
+    TauriEvent2["WINDOW_SCALE_FACTOR_CHANGED"] = "tauri://scale-change";
+    TauriEvent2["WINDOW_THEME_CHANGED"] = "tauri://theme-changed";
+    TauriEvent2["WINDOW_CREATED"] = "tauri://window-created";
+    TauriEvent2["WINDOW_SUSPENDED"] = "tauri://suspended";
+    TauriEvent2["WINDOW_RESUMED"] = "tauri://resumed";
+    TauriEvent2["WEBVIEW_CREATED"] = "tauri://webview-created";
+    TauriEvent2["DRAG_ENTER"] = "tauri://drag-enter";
+    TauriEvent2["DRAG_OVER"] = "tauri://drag-over";
+    TauriEvent2["DRAG_DROP"] = "tauri://drag-drop";
+    TauriEvent2["DRAG_LEAVE"] = "tauri://drag-leave";
+  })(TauriEvent || (TauriEvent = {}));
+  async function _unlisten(event, eventId) {
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener(event, eventId);
+    await invoke("plugin:event|unlisten", {
+      event,
+      eventId
+    });
+  }
+  async function listen(event, handler, options) {
+    var _a;
+    const target = typeof (options === null || options === void 0 ? void 0 : options.target) === "string" ? { kind: "AnyLabel", label: options.target } : (_a = options === null || options === void 0 ? void 0 : options.target) !== null && _a !== void 0 ? _a : { kind: "Any" };
+    return invoke("plugin:event|listen", {
+      event,
+      target,
+      handler: transformCallback(handler)
+    }).then((eventId) => {
+      return async () => _unlisten(event, eventId);
+    });
+  }
+  async function once(event, handler, options) {
+    return listen(event, (eventData) => {
+      void _unlisten(event, eventData.id);
+      handler(eventData);
+    }, options);
+  }
+  async function emit(event, payload) {
+    await invoke("plugin:event|emit", {
+      event,
+      payload
+    });
+  }
+  async function emitTo(target, event, payload) {
+    const eventTarget = typeof target === "string" ? { kind: "AnyLabel", label: target } : target;
+    await invoke("plugin:event|emit_to", {
+      target: eventTarget,
+      event,
+      payload
+    });
+  }
+  var IndexModalState = /* @__PURE__ */ ((IndexModalState2) => {
+    IndexModalState2[IndexModalState2["Idle"] = 0] = "Idle";
+    IndexModalState2[IndexModalState2["InProgress"] = 1] = "InProgress";
+    IndexModalState2[IndexModalState2["Completed"] = 2] = "Completed";
+    IndexModalState2[IndexModalState2["Failed"] = 3] = "Failed";
+    return IndexModalState2;
+  })(IndexModalState || {});
+  class IndexModal {
+    overlay;
+    modal;
+    statusElement;
+    progressBar;
+    state = 0;
+    active = false;
+    originalScrollY = 0;
+    originalFocusElement = null;
+    inertElements = [];
+    constructor() {
+      this.overlay = document.createElement("div");
+      this.modal = document.createElement("div");
+      this.statusElement = document.createElement("p");
+      this.progressBar = document.createElement("div");
+      this.initializeOverlay();
+      this.initializeModal();
+      this.attachEventListeners();
+    }
+    initializeOverlay() {
+      this.overlay.id = "micro-zoukei-index-overlay";
+      this.overlay.setAttribute("role", "presentation");
+      this.overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(15, 23, 42, 0.82);
+            z-index: 999999;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(4px);
+        `;
+      document.body.appendChild(this.overlay);
+    }
+    initializeModal() {
+      this.modal.id = "micro-zoukei-index-modal";
+      this.modal.setAttribute("role", "alertdialog");
+      this.modal.setAttribute("aria-modal", "true");
+      this.modal.setAttribute("aria-labelledby", "micro-zoukei-index-title");
+      this.modal.setAttribute("aria-describedby", "micro-zoukei-index-status");
+      this.modal.setAttribute("aria-busy", "true");
+      this.modal.tabIndex = -1;
+      this.modal.style.cssText = `
+            background-color: #1e293b;
+            color: #e2e8f0;
+            padding: 40px;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            max-width: 500px;
+            width: 90%;
+            text-align: center;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5);
+            transform: scale(0.9);
+            transition: transform 0.3s ease;
+            outline: none;
+        `;
+      const title = document.createElement("h2");
+      title.id = "micro-zoukei-index-title";
+      title.style.cssText = "font-size: 24px; font-weight: 600; margin: 0 0 8px;";
+      title.textContent = "Initializing Knowledge Base";
+      this.statusElement.id = "micro-zoukei-index-status";
+      this.statusElement.style.cssText = "font-size: 16px; color: #94a3b8; margin: 0 0 24px;";
+      this.statusElement.setAttribute("aria-live", "polite");
+      this.statusElement.textContent = "Starting index validation...";
+      const progressContainer = document.createElement("div");
+      progressContainer.id = "micro-zoukei-index-progress";
+      progressContainer.style.cssText = "width: 100%; height: 4px; background: #374151; border-radius: 2px; overflow: hidden;";
+      progressContainer.setAttribute("role", "progressbar");
+      progressContainer.setAttribute("aria-label", "Initial index progress");
+      progressContainer.setAttribute("aria-valuemin", "0");
+      progressContainer.setAttribute("aria-valuemax", "100");
+      progressContainer.setAttribute("aria-valuenow", "0");
+      this.progressBar.id = "micro-zoukei-index-progress-bar";
+      this.progressBar.style.cssText = "width: 0%; height: 100%; background: #3b82f6; transition: width 0.3s ease;";
+      progressContainer.appendChild(this.progressBar);
+      this.modal.append(title, this.statusElement, progressContainer);
+      this.overlay.appendChild(this.modal);
+    }
+    attachEventListeners() {
+      this.overlay.addEventListener("click", (event) => {
+        if (event.target === this.overlay && this.state !== 1) {
+          this.hide();
+        }
+      });
+      this.overlay.addEventListener("wheel", (event) => {
+        if (this.active) event.preventDefault();
+      }, { passive: false });
+      this.overlay.addEventListener("touchmove", (event) => {
+        if (this.active) event.preventDefault();
+      }, { passive: false });
+      document.addEventListener("keydown", (event) => {
+        if (!this.active) return;
+        if (event.key === "Escape") {
+          event.preventDefault();
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const focusable = this.getFocusableElements();
+        if (focusable.length === 0) {
+          event.preventDefault();
+          this.modal.focus();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }, { capture: true });
+    }
+    getFocusableElements() {
+      return Array.from(
+        this.modal.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      );
+    }
+    show(state, options = {}) {
+      this.state = state;
+      if (state !== 1) {
+        this.hide();
+        return;
+      }
+      if (!this.active) {
+        this.active = true;
+        this.originalScrollY = window.scrollY;
+        this.originalFocusElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        this.inertElements = Array.from(document.body.children).filter((element) => element instanceof HTMLElement && element !== this.overlay).map((element) => ({ element, wasInert: element.inert }));
+        this.inertElements.forEach(({ element }) => {
+          element.inert = true;
+        });
+        document.body.style.overflow = "hidden";
+        this.overlay.style.display = "flex";
+        requestAnimationFrame(() => this.modal.focus());
+      }
+      this.modal.setAttribute("aria-busy", "true");
+      this.statusElement.textContent = options.message || "Indexing knowledge base...";
+    }
+    hide() {
+      if (!this.active) {
+        this.overlay.style.display = "none";
+        return;
+      }
+      this.overlay.style.display = "none";
+      this.active = false;
+      this.modal.setAttribute("aria-busy", "false");
+      document.body.style.overflow = "";
+      this.inertElements.forEach(({ element, wasInert }) => {
+        element.inert = wasInert;
+      });
+      this.inertElements = [];
+      try {
+        window.scrollTo(0, this.originalScrollY);
+      } catch {
+      }
+      if (this.originalFocusElement?.isConnected) {
+        this.originalFocusElement.focus();
+      } else {
+        this.modal.blur();
+      }
+      this.originalFocusElement = null;
+    }
+    updateProgress(percentage) {
+      const value = Math.max(0, Math.min(100, percentage));
+      this.progressBar.style.width = `${value}%`;
+      this.progressBar.parentElement?.setAttribute("aria-valuenow", String(value));
+    }
+  }
+  const indexModal = new IndexModal();
+  function showIndexModal(state, options) {
+    indexModal.show(state, options ?? {});
+  }
+  function hideIndexModal() {
+    indexModal.hide();
+  }
+  const INITIAL_INDEX_EVENT = "initial-index-status";
+  let frontendState = "idle";
+  let unlistenInitialIndexStatus;
+  let listenerRegistration = null;
+  let listenerGeneration = 0;
+  function showIndexingProgress(status) {
+    showIndexModal(IndexModalState.InProgress, {
+      message: status === "started" ? "Starting initial knowledge base index..." : "Indexing knowledge base in progress..."
+    });
+  }
+  function showIndexingFailure(error) {
+    hideIndexModal();
+    showError({
+      message: `Initial knowledge base indexing failed: ${error}`,
+      showDetails: true
+    });
+  }
+  function handleInitialIndexStatus(payload) {
+    switch (payload.status) {
+      case "started":
+      case "in_progress":
+        if (frontendState === "completed") {
+          return;
+        }
+        frontendState = "in_progress";
+        showIndexingProgress(payload.status);
+        break;
+      case "completed":
+        frontendState = "completed";
+        hideIndexModal();
+        void rpcBridge.logMessage(
+          "info",
+          `[MicroZoukei] Initial index completed with ${payload.documentCount ?? 0} documents`
+        );
+        break;
+      case "failed": {
+        frontendState = "failed";
+        const errorMessage = payload.error || "Unknown indexing error";
+        showIndexingFailure(errorMessage);
+        break;
+      }
+    }
+  }
+  function handleInitialIndexResponse(response) {
+    if (frontendState === "completed" || frontendState === "failed") {
+      return;
+    }
+    switch (response.status) {
+      case "already_valid":
+        frontendState = "completed";
+        hideIndexModal();
+        break;
+      case "in_progress":
+      case "started":
+        frontendState = "in_progress";
+        showIndexingProgress(response.status);
+        break;
+    }
+  }
+  function startInitialIndexEventListening() {
+    if (unlistenInitialIndexStatus) {
+      return Promise.resolve();
+    }
+    if (listenerRegistration) {
+      return listenerRegistration;
+    }
+    const generation = ++listenerGeneration;
+    const registration = listen(INITIAL_INDEX_EVENT, (event) => {
+      handleInitialIndexStatus(event.payload);
+    }).then((unlisten) => {
+      if (generation !== listenerGeneration) {
+        unlisten();
+        return;
+      }
+      unlistenInitialIndexStatus = unlisten;
+    }).catch((error) => {
+      console.error("[MicroZoukei] Failed to subscribe to initial index events:", error);
+      if (generation === listenerGeneration) {
+        unlistenInitialIndexStatus = void 0;
+      }
+    });
+    listenerRegistration = registration;
+    void registration.finally(() => {
+      if (listenerRegistration === registration) {
+        listenerRegistration = null;
+      }
+    });
+    return registration;
+  }
+  function requestInitialIndexStatus() {
+    if (frontendState === "completed" || frontendState === "in_progress") {
+      return Promise.resolve();
+    }
+    frontendState = "in_progress";
+    showIndexingProgress("started");
+    const promise = rpcBridge.ensureInitialIndex().then(handleInitialIndexResponse).catch((error) => {
+      frontendState = "failed";
+      const errorMessage = error instanceof Error ? error.message : "Unknown indexing error";
+      showIndexingFailure(errorMessage);
+    });
+    return promise.finally(() => {
+    });
+  }
+  function requestInitialIndexForProjectsRoute() {
+    return requestInitialIndexStatus();
+  }
+  function cleanupInitialIndexLifecycle() {
+    listenerGeneration += 1;
+    const pendingRegistration = listenerRegistration;
+    listenerRegistration = null;
+    if (unlistenInitialIndexStatus) {
+      unlistenInitialIndexStatus();
+      unlistenInitialIndexStatus = void 0;
+    }
+    if (pendingRegistration) {
+      void pendingRegistration.catch(() => void 0);
+    }
+    frontendState = "idle";
+    hideIndexModal();
+  }
   class LogicalSize {
     constructor(...args) {
       this.type = "Logical";
@@ -492,63 +787,6 @@ var InjectedScript = (function(exports) {
     toJSON() {
       return this[SERIALIZE_TO_IPC_FN]();
     }
-  }
-  var TauriEvent;
-  (function(TauriEvent2) {
-    TauriEvent2["WINDOW_RESIZED"] = "tauri://resize";
-    TauriEvent2["WINDOW_MOVED"] = "tauri://move";
-    TauriEvent2["WINDOW_CLOSE_REQUESTED"] = "tauri://close-requested";
-    TauriEvent2["WINDOW_DESTROYED"] = "tauri://destroyed";
-    TauriEvent2["WINDOW_FOCUS"] = "tauri://focus";
-    TauriEvent2["WINDOW_BLUR"] = "tauri://blur";
-    TauriEvent2["WINDOW_SCALE_FACTOR_CHANGED"] = "tauri://scale-change";
-    TauriEvent2["WINDOW_THEME_CHANGED"] = "tauri://theme-changed";
-    TauriEvent2["WINDOW_CREATED"] = "tauri://window-created";
-    TauriEvent2["WINDOW_SUSPENDED"] = "tauri://suspended";
-    TauriEvent2["WINDOW_RESUMED"] = "tauri://resumed";
-    TauriEvent2["WEBVIEW_CREATED"] = "tauri://webview-created";
-    TauriEvent2["DRAG_ENTER"] = "tauri://drag-enter";
-    TauriEvent2["DRAG_OVER"] = "tauri://drag-over";
-    TauriEvent2["DRAG_DROP"] = "tauri://drag-drop";
-    TauriEvent2["DRAG_LEAVE"] = "tauri://drag-leave";
-  })(TauriEvent || (TauriEvent = {}));
-  async function _unlisten(event, eventId) {
-    window.__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener(event, eventId);
-    await invoke("plugin:event|unlisten", {
-      event,
-      eventId
-    });
-  }
-  async function listen(event, handler, options) {
-    var _a;
-    const target = typeof (options === null || options === void 0 ? void 0 : options.target) === "string" ? { kind: "AnyLabel", label: options.target } : (_a = options === null || options === void 0 ? void 0 : options.target) !== null && _a !== void 0 ? _a : { kind: "Any" };
-    return invoke("plugin:event|listen", {
-      event,
-      target,
-      handler: transformCallback(handler)
-    }).then((eventId) => {
-      return async () => _unlisten(event, eventId);
-    });
-  }
-  async function once(event, handler, options) {
-    return listen(event, (eventData) => {
-      void _unlisten(event, eventData.id);
-      handler(eventData);
-    }, options);
-  }
-  async function emit(event, payload) {
-    await invoke("plugin:event|emit", {
-      event,
-      payload
-    });
-  }
-  async function emitTo(target, event, payload) {
-    const eventTarget = typeof target === "string" ? { kind: "AnyLabel", label: target } : target;
-    await invoke("plugin:event|emit_to", {
-      target: eventTarget,
-      event,
-      payload
-    });
   }
   class Image extends Resource {
     /**
@@ -3268,6 +3506,9 @@ var InjectedScript = (function(exports) {
   let elm = null;
   let morespace_icon = document.createElement("i");
   let cachedCodeEditor = null;
+  let createdMoreSpaceIcon = false;
+  let initializeAppExtensionCleanup = null;
+  let initializationGeneration = 0;
   const visible_header = (visible) => {
     const header = document.getElementsByTagName("header")[0];
     const container = document.getElementsByClassName("main-container")[0];
@@ -3507,6 +3748,37 @@ var InjectedScript = (function(exports) {
       console.log("Successfully hijacked and extended setSection.");
     };
   };
+  let originalSetMainSection = null;
+  let wrappedSetMainSection = null;
+  const restoreSetMainSectionOverride = () => {
+    const appui = window.app?.appui;
+    if (appui?.setMainSection === wrappedSetMainSection && originalSetMainSection) {
+      appui.setMainSection = originalSetMainSection;
+    }
+    originalSetMainSection = null;
+    wrappedSetMainSection = null;
+  };
+  const overrideSetMainSection = (appui) => {
+    if (!appui || typeof appui.setMainSection !== "function") {
+      console.error("Not found appui.setMainSection function");
+      return () => void 0;
+    }
+    if (appui.setMainSection === wrappedSetMainSection) {
+      return restoreSetMainSectionOverride;
+    }
+    const originalSetMainSectionRef = appui.setMainSection;
+    const wrappedSetMainSectionRef = function(section, ...args) {
+      const result = originalSetMainSectionRef.apply(this, [section, ...args]);
+      if (section === "projects") {
+        void requestInitialIndexForProjectsRoute();
+      }
+      return result;
+    };
+    originalSetMainSection = originalSetMainSectionRef;
+    wrappedSetMainSection = wrappedSetMainSectionRef;
+    appui.setMainSection = wrappedSetMainSectionRef;
+    return restoreSetMainSectionOverride;
+  };
   const injectRequiredStyles = () => {
     const style = document.createElement("style");
     style.textContent = `
@@ -3529,7 +3801,16 @@ var InjectedScript = (function(exports) {
         `;
     document.head.appendChild(style);
   };
-  const initializeAppExtension = () => {
+  const normalizePathname = (pathname) => {
+    const normalized = pathname.trim();
+    const withLeadingSlash = normalized.startsWith("/") ? normalized : `/${normalized}`;
+    return withLeadingSlash.endsWith("/") ? withLeadingSlash : `${withLeadingSlash}/`;
+  };
+  const isProjectsRoute = () => normalizePathname(window.location.pathname) === "/projects/";
+  const initializeAppExtension = async () => {
+    initializeAppExtensionCleanup?.();
+    const generation = ++initializationGeneration;
+    await startInitialIndexEventListening();
     removeElements();
     elm = document.getElementById("project-morespace");
     if (!elm) {
@@ -3542,6 +3823,7 @@ var InjectedScript = (function(exports) {
       elm = document.getElementById("project-icon");
       if (elm && elm instanceof HTMLElement) {
         elm.after(morespace_icon);
+        createdMoreSpaceIcon = true;
       }
     }
     elm = document.getElementsByTagName("header")[0];
@@ -3563,57 +3845,113 @@ var InjectedScript = (function(exports) {
     overrideCreateFullscreenFeatures(targetAppUi);
     setupAgentChatWindow();
     overrideProjectLoaded();
+    let restoreSetMainSection = null;
+    if (targetAppUi && typeof targetAppUi.setMainSection === "function") {
+      restoreSetMainSection = overrideSetMainSection(targetAppUi);
+    }
+    if (isProjectsRoute()) {
+      void requestInitialIndexForProjectsRoute();
+    }
+    const cleanup = () => {
+      if (generation !== initializationGeneration) {
+        return;
+      }
+      restoreSetMainSection?.();
+      cleanupInitialIndexLifecycle();
+      if (createdMoreSpaceIcon && morespace_icon.isConnected) {
+        morespace_icon.remove();
+      }
+      if (createdMoreSpaceIcon) {
+        morespace_icon.onclick = null;
+      }
+      if (createdMoreSpaceIcon) {
+        flag_morespace = false;
+      }
+      createdMoreSpaceIcon = false;
+      initializeAppExtensionCleanup = null;
+    };
+    initializeAppExtensionCleanup = cleanup;
+    return cleanup;
   };
   const PROXY_PORT = 8080;
-  exports.bridgeReady = false;
+  let activeCleanup = null;
+  let initializationToken = 0;
+  let pendingInitializationTimeout;
+  const clearPendingInitialization = () => {
+    if (pendingInitializationTimeout !== void 0) {
+      clearTimeout(pendingInitializationTimeout);
+      pendingInitializationTimeout = void 0;
+    }
+  };
+  const waitForMicroStudioLoad = (token) => {
+    return new Promise((resolve) => {
+      const check = () => {
+        if (token !== initializationToken) {
+          return;
+        }
+        if (window.app?.appui?.setMainSection) {
+          resolve();
+          return;
+        }
+        pendingInitializationTimeout = setTimeout(check, 100);
+      };
+      check();
+    });
+  };
   const cleanupInjectedScript = () => {
+    initializationToken += 1;
+    clearPendingInitialization();
     hideAllErrors();
     if (window.microZoukei) {
       delete window.microZoukei;
     }
+    if (activeCleanup) {
+      const cleanup = activeCleanup;
+      activeCleanup = null;
+      cleanup();
+    }
+    cleanupInitialIndexLifecycle();
+    delete window.microZoukeiInjectedState;
   };
-  async function withLoading(operation, message) {
-    if (!isLoadingDisplayed()) {
-      showLoading({ message });
-    }
+  const initializeInjectedScript = async () => {
+    const token = ++initializationToken;
+    window.microZoukeiInjectedState = {
+      cleanup: cleanupInjectedScript
+    };
+    window.PROXY_PORT = PROXY_PORT;
     try {
-      const result = await operation();
-      return result;
-    } finally {
-      hideLoading();
+      const ready = await checkBridgeHealth();
+      if (!ready || token !== initializationToken) {
+        return;
+      }
+      window.microZoukei = rpcBridge;
+      rpcBridge.logMessage("info", "[MicroZoukei] RPC Bridge initialized and ready");
+      await waitForMicroStudioLoad(token);
+      if (token !== initializationToken) {
+        return;
+      }
+      const cleanup = await initializeAppExtension();
+      if (token !== initializationToken) {
+        cleanup();
+        return;
+      }
+      activeCleanup = cleanup;
+    } catch (error) {
+      if (token !== initializationToken) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : "Unknown initialization error";
+      showError({
+        message: `MicroZoukei initialization failed: ${message}`,
+        showDetails: true
+      });
     }
-  }
-  const waitForMicroStudioLoad = () => {
-    const isLoaded = window.app && window.app.appui;
-    if (isLoaded) {
-      console.log("🎯 I have confirmed that microStudio has started. I will now begin extending the UI.");
-      setTimeout(() => {
-        initializeAppExtension();
-      }, 100);
-      return;
-    }
-    requestAnimationFrame(waitForMicroStudioLoad);
   };
   if (typeof window !== "undefined") {
     console.log("[MicroZoukei] Injected script loaded and executing");
-    cleanupInjectedScript();
-    window.PROXY_PORT = PROXY_PORT;
-    void checkBridgeHealth().then((ready) => {
-      exports.bridgeReady = ready;
-      if (exports.bridgeReady) {
-        window.microZoukei = rpcBridge;
-        rpcBridge.logMessage("info", "[MicroZoukei] RPC Bridge initialized and ready");
-        waitForMicroStudioLoad();
-      } else {
-        showError({
-          message: "Tauri API not available. Please ensure the app is running."
-        });
-        console.warn("[MicroZoukei] Tauri API not yet available. Will initialize when injected.");
-      }
-    });
+    void initializeInjectedScript();
   }
   exports.cleanupInjectedScript = cleanupInjectedScript;
-  exports.withLoading = withLoading;
   Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
   return exports;
 })({});
