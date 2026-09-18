@@ -48,6 +48,145 @@ pub enum SupportedClient {
     Ollama(ollama::Client),
     OpenRouter(openrouter::Client),
 }
+#[derive(Debug)]
+pub enum RagIndexError {
+    UnsupportedProvider {
+        provider: String,
+    },
+    UnknownModel {
+        provider: String,
+        model: String,
+        dims: usize,
+    },
+    InvalidDimensions {
+        provider: String,
+        model: String,
+        dims: usize,
+    },
+    EmbeddingDimensionMismatch {
+        provider: String,
+        model: String,
+        expected: usize,
+        actual: usize,
+    },
+    Arrow(lancedb::arrow::arrow_schema::ArrowError),
+}
+
+impl std::fmt::Display for RagIndexError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedProvider { provider } => {
+                write!(formatter, "Unsupported embedding provider: {}", provider)
+            }
+            Self::UnknownModel {
+                provider,
+                model,
+                dims,
+            } => write!(
+                formatter,
+                "Unable to determine embedding dimensions for provider '{}' and model '{}' (resolved dimensions: {})",
+                provider,
+                model,
+                dims
+            ),
+            Self::InvalidDimensions {
+                provider,
+                model,
+                dims,
+            } => write!(
+                formatter,
+                "Invalid embedding dimensions for provider '{}' and model '{}': {}; expected a value between 1 and {}",
+                provider,
+                model,
+                dims,
+                i32::MAX
+            ),
+            Self::EmbeddingDimensionMismatch {
+                provider,
+                model,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "Embedding dimension mismatch for provider '{}' and model '{}': expected {}, got {}",
+                provider,
+                model,
+                expected,
+                actual
+            ),
+            Self::Arrow(error) => write!(formatter, "Arrow error: {}", error),
+        }
+    }
+}
+
+impl std::error::Error for RagIndexError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Arrow(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<lancedb::arrow::arrow_schema::ArrowError> for RagIndexError {
+    fn from(error: lancedb::arrow::arrow_schema::ArrowError) -> Self {
+        Self::Arrow(error)
+    }
+}
+
+fn validate_embedding_dimensions(
+    provider: &str,
+    model_name: &str,
+    dims: usize,
+) -> Result<usize, RagIndexError> {
+    if dims == 0 || dims > i32::MAX as usize {
+        return Err(RagIndexError::InvalidDimensions {
+            provider: provider.to_string(),
+            model: model_name.to_string(),
+            dims,
+        });
+    }
+
+    Ok(dims)
+}
+
+fn resolve_embedding_dimensions(
+    provider: &str,
+    model_name: &str,
+    client: &SupportedClient,
+) -> Result<usize, RagIndexError> {
+    let normalized_provider = provider.trim().to_ascii_lowercase();
+    match normalized_provider.as_str() {
+        "openai" | "ollama" | "openrouter" => {}
+        _ => {
+            return Err(RagIndexError::UnsupportedProvider {
+                provider: normalized_provider,
+            });
+        }
+    }
+
+    let dims = match client {
+        SupportedClient::OpenAi(client) => client.embedding_model(model_name).ndims(),
+        SupportedClient::Ollama(client) => {
+            let lookup_model = model_name.split(':').next().unwrap_or(model_name);
+            match lookup_model {
+                "nomic-embed-text" => 768,
+                _ => client.embedding_model(model_name).ndims(),
+            }
+        }
+        SupportedClient::OpenRouter(client) => client.embedding_model(model_name).ndims(),
+    };
+
+    if dims == 0 {
+        return Err(RagIndexError::UnknownModel {
+            provider: normalized_provider,
+            model: model_name.to_string(),
+            dims,
+        });
+    }
+
+    validate_embedding_dimensions(&normalized_provider, model_name, dims)
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DocumentRecord {
@@ -94,17 +233,14 @@ pub fn create_llm_client(provider: &str) -> Result<SupportedClient, Box<dyn std:
     }
 }
 
-// Convert (DocumentRecord, Vec<Embedding>) pairs into a RecordBatch that
-// LanceDB can write via `create_table`. LanceDB's `create_table` requires a
-// `Scannable` (e.g. `Vec<RecordBatch>`); raw `(document, embeddings)` pairs are
-// not `Scannable`, so they must be materialized into a RecordBatch first.
-//
-// A document may produce multiple embeddings; each one becomes its own row in
-// the table, sharing the document's id, relative_path, and text.
 fn as_record_batch(
+    provider: &str,
+    model_name: &str,
     records: Vec<(DocumentRecord, Vec<Embedding>)>,
     dims: usize,
-) -> Result<RecordBatch, lancedb::arrow::arrow_schema::ArrowError> {
+) -> Result<RecordBatch, RagIndexError> {
+    validate_embedding_dimensions(provider, model_name, dims)?;
+
     let mut ids: Vec<String> = Vec::new();
     let mut relative_paths: Vec<String> = Vec::new();
     let mut texts: Vec<String> = Vec::new();
@@ -112,6 +248,16 @@ fn as_record_batch(
 
     for (record, embeddings) in records {
         for embedding in embeddings {
+            let actual = embedding.vec.len();
+            if actual != dims {
+                return Err(RagIndexError::EmbeddingDimensionMismatch {
+                    provider: provider.to_string(),
+                    model: model_name.to_string(),
+                    expected: dims,
+                    actual,
+                });
+            }
+
             ids.push(record.id.clone());
             relative_paths.push(record.relative_path.clone());
             texts.push(record.text.clone());
@@ -127,12 +273,12 @@ fn as_record_batch(
     let embedding =
         FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(embedding_vecs, dims as i32);
 
-    RecordBatch::try_from_iter(vec![
+    Ok(RecordBatch::try_from_iter(vec![
         ("id", Arc::new(id) as ArrayRef),
         ("relative_path", Arc::new(relative_path) as ArrayRef),
         ("text", Arc::new(text) as ArrayRef),
         ("embedding", Arc::new(embedding) as ArrayRef),
-    ])
+    ])?)
 }
 
 // Check supported source extensions independently of file existence so deletion
@@ -182,11 +328,12 @@ pub async fn rag_inject_documents(
 
     let total_count = documents.len();
     let client_enum = create_llm_client(provider)?;
+    let expected_dims = resolve_embedding_dimensions(provider, embedding_model_name, &client_enum)?;
 
     // Shared macro to avoid duplicating vector injection code
     macro_rules! inject_with_client {
         ($client:expr) => {{
-            let model = $client.embedding_model(embedding_model_name);
+            let model = $client.embedding_model_with_ndims(embedding_model_name, expected_dims);
             let embeddings = EmbeddingsBuilder::new(model.clone())
                 .documents(documents)?
                 .build()
@@ -194,7 +341,8 @@ pub async fn rag_inject_documents(
             // LanceDB's `create_table` requires a `Scannable` (e.g.
             // `Vec<RecordBatch>`). Raw `(document, embeddings)` pairs are not
             // `Scannable`, so materialize them into a RecordBatch first.
-            let record_batch = as_record_batch(embeddings, model.ndims())?;
+            let record_batch =
+                as_record_batch(provider, embedding_model_name, embeddings, expected_dims)?;
             let _ = db.drop_table("my_documents", &[]).await;
             let _table = db
                 .create_table("my_documents", vec![record_batch])
@@ -222,6 +370,7 @@ pub async fn rag_query_answer(
     let db = lancedb::connect(db_uri).execute().await?;
     let table = db.open_table("my_documents").execute().await?;
     let client_enum = create_llm_client(provider)?;
+    let expected_dims = resolve_embedding_dimensions(provider, embedding_model_name, &client_enum)?;
 
     let preamble =
         "You are an excellent assistant who answers questions based on the provided documents.";
@@ -229,7 +378,8 @@ pub async fn rag_query_answer(
     // Shared macro to avoid duplicating RAG agent creation code
     macro_rules! query_with_client {
         ($client:expr) => {{
-            let embed_model = $client.embedding_model(embedding_model_name);
+            let embed_model =
+                $client.embedding_model_with_ndims(embedding_model_name, expected_dims);
             let completion_model = $client.completion_model(completion_model_name);
             let index =
                 LanceDbVectorIndex::new(table, embed_model, "id", SearchParams::default()).await?;
@@ -490,10 +640,12 @@ pub fn create_document_records(
 
 /// Build record batch from documents and embeddings
 pub fn build_record_batch(
+    provider: &str,
+    model_name: &str,
     records: Vec<(DocumentRecord, Vec<Embedding>)>,
     dims: usize,
-) -> Result<RecordBatch, lancedb::arrow::arrow_schema::ArrowError> {
-    as_record_batch(records, dims)
+) -> Result<RecordBatch, RagIndexError> {
+    as_record_batch(provider, model_name, records, dims)
 }
 
 /// Write record batch to my_documents table (replaces existing)
@@ -517,14 +669,10 @@ pub async fn ensure_initial_index(
     target_dir: &str,
     db_uri: &str,
 ) -> Result<TableValidationResult, Box<dyn std::error::Error>> {
-    // First, validate existing table
     let client_enum = create_llm_client(provider)?;
-    let expected_dims = match &client_enum {
-        SupportedClient::OpenAi(client) => client.embedding_model(embedding_model_name).ndims(),
-        SupportedClient::Ollama(client) => client.embedding_model(embedding_model_name).ndims(),
-        SupportedClient::OpenRouter(client) => client.embedding_model(embedding_model_name).ndims(),
-    };
+    let expected_dims = resolve_embedding_dimensions(provider, embedding_model_name, &client_enum)?;
 
+    // First, validate existing table
     let validation = validate_my_documents_table(db_uri, expected_dims).await?;
     if validation.valid {
         return Ok(validation);
@@ -550,21 +698,21 @@ pub async fn ensure_initial_index(
     // Generate embeddings
     let embeddings = match client_enum {
         SupportedClient::OpenAi(client) => {
-            let model = client.embedding_model(embedding_model_name);
+            let model = client.embedding_model_with_ndims(embedding_model_name, expected_dims);
             EmbeddingsBuilder::new(model.clone())
                 .documents(documents)?
                 .build()
                 .await?
         }
         SupportedClient::Ollama(client) => {
-            let model = client.embedding_model(embedding_model_name);
+            let model = client.embedding_model_with_ndims(embedding_model_name, expected_dims);
             EmbeddingsBuilder::new(model.clone())
                 .documents(documents)?
                 .build()
                 .await?
         }
         SupportedClient::OpenRouter(client) => {
-            let model = client.embedding_model(embedding_model_name);
+            let model = client.embedding_model_with_ndims(embedding_model_name, expected_dims);
             EmbeddingsBuilder::new(model.clone())
                 .documents(documents)?
                 .build()
@@ -573,7 +721,8 @@ pub async fn ensure_initial_index(
     };
 
     // Build record batch
-    let record_batch = build_record_batch(embeddings, expected_dims)?;
+    let record_batch =
+        build_record_batch(provider, embedding_model_name, embeddings, expected_dims)?;
 
     // Write table
     write_my_documents_table(db_uri, record_batch).await?;
@@ -589,6 +738,148 @@ mod tests {
     use arrow_array::{ArrayRef, FixedSizeListArray, Int64Array, RecordBatch, StringArray};
     use std::sync::Arc;
     use tempfile::tempdir;
+
+    fn ollama_client() -> SupportedClient {
+        SupportedClient::Ollama(ollama::Client::new("").unwrap())
+    }
+
+    #[test]
+    fn resolves_tagged_and_untagged_nomic_embeddings_to_768_dimensions() {
+        let client = ollama_client();
+
+        assert_eq!(
+            resolve_embedding_dimensions("ollama", "nomic-embed-text:latest", &client).unwrap(),
+            768
+        );
+        assert_eq!(
+            resolve_embedding_dimensions("OLLAMA", "nomic-embed-text", &client).unwrap(),
+            768
+        );
+    }
+
+    #[test]
+    fn preserves_the_original_ollama_model_identifier_on_explicit_model() {
+        let model = ollama::Client::new("")
+            .unwrap()
+            .embedding_model_with_ndims("nomic-embed-text:latest", 768);
+
+        assert_eq!(model.model, "nomic-embed-text:latest");
+        assert_eq!(model.ndims(), 768);
+    }
+
+    #[test]
+    fn rejects_an_unsupported_provider_before_model_resolution() {
+        let error =
+            resolve_embedding_dimensions("unknown", "nomic-embed-text:latest", &ollama_client())
+                .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RagIndexError::UnsupportedProvider { provider } if provider == "unknown"
+        ));
+    }
+
+    #[test]
+    fn rejects_an_unknown_embedding_model() {
+        let error =
+            resolve_embedding_dimensions("ollama", "unknown-embedding-model", &ollama_client())
+                .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RagIndexError::UnknownModel {
+                provider,
+                model,
+                dims: 0,
+            } if provider == "ollama" && model == "unknown-embedding-model"
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_dimensions_before_arrow_construction() {
+        let error =
+            build_record_batch("ollama", "nomic-embed-text:latest", Vec::new(), 0).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RagIndexError::InvalidDimensions {
+                provider,
+                model,
+                dims: 0,
+            } if provider == "ollama" && model == "nomic-embed-text:latest"
+        ));
+    }
+
+    #[test]
+    fn rejects_embedding_vector_length_mismatches() {
+        let records = vec![(
+            DocumentRecord {
+                id: "doc-1".to_string(),
+                relative_path: "one.md".to_string(),
+                text: "content".to_string(),
+            },
+            vec![Embedding {
+                document: "content".to_string(),
+                vec: vec![1.0, 2.0],
+            }],
+        )];
+
+        let error =
+            build_record_batch("ollama", "nomic-embed-text:latest", records, 3).unwrap_err();
+        let message = error.to_string();
+
+        assert!(matches!(
+            &error,
+            RagIndexError::EmbeddingDimensionMismatch {
+                provider,
+                model,
+                expected: 3,
+                actual: 2,
+            } if provider == "ollama" && model == "nomic-embed-text:latest"
+        ));
+        assert!(message.contains("expected 3, got 2"));
+    }
+
+    #[test]
+    fn builds_a_record_batch_from_multiple_valid_embedding_vectors() {
+        let records = vec![
+            (
+                DocumentRecord {
+                    id: "doc-1".to_string(),
+                    relative_path: "one.md".to_string(),
+                    text: "first".to_string(),
+                },
+                vec![Embedding {
+                    document: "first".to_string(),
+                    vec: vec![1.0, 2.0],
+                }],
+            ),
+            (
+                DocumentRecord {
+                    id: "doc-2".to_string(),
+                    relative_path: "two.md".to_string(),
+                    text: "second".to_string(),
+                },
+                vec![Embedding {
+                    document: "second".to_string(),
+                    vec: vec![3.0, 4.0],
+                }],
+            ),
+        ];
+
+        let batch = build_record_batch("ollama", "nomic-embed-text", records, 2).unwrap();
+
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 4);
+        let schema = batch.schema();
+        let DataType::FixedSizeList(field, width) =
+            schema.field_with_name("embedding").unwrap().data_type()
+        else {
+            panic!("embedding field must be a fixed-size list");
+        };
+        assert_eq!(*width, 2);
+        assert_eq!(field.data_type(), &DataType::Float64);
+    }
 
     #[test]
     fn knowledge_relative_path_uses_root_relative_paths() {

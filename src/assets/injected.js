@@ -491,10 +491,37 @@ var InjectedScript = (function(exports) {
     indexModal = void 0;
   }
   const INITIAL_INDEX_EVENT = "initial-index-status";
+  const INITIAL_INDEX_RESPONSE_TIMEOUT_MS = 3e3;
   let frontendState = "idle";
   let unlistenInitialIndexStatus;
   let listenerRegistration = null;
   let listenerGeneration = 0;
+  let requestResolve;
+  let responseTimeoutId;
+  let requestGeneration = 0;
+  let activeRequestGeneration = null;
+  function clearInitialIndexResponseTimeout() {
+    if (responseTimeoutId !== void 0) {
+      clearTimeout(responseTimeoutId);
+      responseTimeoutId = void 0;
+    }
+  }
+  function resolveActiveRequest() {
+    const resolve = requestResolve;
+    requestResolve = void 0;
+    resolve?.();
+  }
+  function failInitialIndexRequest(error) {
+    if (frontendState === "completed" || frontendState === "failed") {
+      return;
+    }
+    frontendState = "failed";
+    activeRequestGeneration = null;
+    clearInitialIndexResponseTimeout();
+    resolveActiveRequest();
+    const errorMessage = error instanceof Error ? error.message : "Unknown indexing error";
+    showIndexingFailure(errorMessage);
+  }
   function showIndexingProgress(status) {
     showIndexModal(IndexModalState.InProgress, {
       message: status === "started" ? "Starting initial knowledge base index..." : "Indexing knowledge base in progress..."
@@ -508,17 +535,20 @@ var InjectedScript = (function(exports) {
     });
   }
   function handleInitialIndexStatus(payload) {
+    if (frontendState === "completed" || frontendState === "failed") {
+      return;
+    }
     switch (payload.status) {
       case "started":
       case "in_progress":
-        if (frontendState === "completed") {
-          return;
-        }
         frontendState = "in_progress";
         showIndexingProgress(payload.status);
         break;
       case "completed":
         frontendState = "completed";
+        activeRequestGeneration = null;
+        clearInitialIndexResponseTimeout();
+        resolveActiveRequest();
         hideIndexModal();
         void rpcBridge.logMessage(
           "info",
@@ -526,9 +556,8 @@ var InjectedScript = (function(exports) {
         );
         break;
       case "failed": {
-        frontendState = "failed";
         const errorMessage = payload.error || "Unknown indexing error";
-        showIndexingFailure(errorMessage);
+        failInitialIndexRequest(new Error(errorMessage));
         break;
       }
     }
@@ -540,12 +569,17 @@ var InjectedScript = (function(exports) {
     switch (response.status) {
       case "already_valid":
         frontendState = "completed";
+        activeRequestGeneration = null;
+        clearInitialIndexResponseTimeout();
+        resolveActiveRequest();
         hideIndexModal();
         break;
       case "in_progress":
       case "started":
         frontendState = "in_progress";
         showIndexingProgress(response.status);
+        clearInitialIndexResponseTimeout();
+        resolveActiveRequest();
         break;
     }
   }
@@ -585,10 +619,34 @@ var InjectedScript = (function(exports) {
     }
     frontendState = "in_progress";
     showIndexingProgress("started");
-    const promise = rpcBridge.ensureInitialIndex().then(handleInitialIndexResponse).catch((error) => {
-      frontendState = "failed";
-      const errorMessage = error instanceof Error ? error.message : "Unknown indexing error";
-      showIndexingFailure(errorMessage);
+    const generation = ++requestGeneration;
+    activeRequestGeneration = generation;
+    const promise = new Promise((resolve) => {
+      requestResolve = resolve;
+    });
+    responseTimeoutId = setTimeout(() => {
+      responseTimeoutId = void 0;
+      if (activeRequestGeneration !== generation) {
+        return;
+      }
+      failInitialIndexRequest(
+        new Error(`Initial indexing request timed out: backend did not respond within ${INITIAL_INDEX_RESPONSE_TIMEOUT_MS / 1e3} seconds`)
+      );
+    }, INITIAL_INDEX_RESPONSE_TIMEOUT_MS);
+    let request;
+    try {
+      request = rpcBridge.ensureInitialIndex();
+    } catch (error) {
+      request = Promise.reject(error);
+    }
+    void request.then((response) => {
+      if (activeRequestGeneration === generation && frontendState !== "failed") {
+        handleInitialIndexResponse(response);
+      }
+    }).catch((error) => {
+      if (activeRequestGeneration === generation) {
+        failInitialIndexRequest(error);
+      }
     });
     return promise.finally(() => {
     });
@@ -607,7 +665,13 @@ var InjectedScript = (function(exports) {
     if (pendingRegistration) {
       void pendingRegistration.catch(() => void 0);
     }
+    const resolve = requestResolve;
+    requestResolve = void 0;
+    clearInitialIndexResponseTimeout();
+    activeRequestGeneration = null;
+    requestGeneration += 1;
     frontendState = "idle";
+    resolve?.();
     disposeIndexModal();
   }
   class LogicalSize {
