@@ -1,8 +1,13 @@
 import { listen } from '@tauri-apps/api/event';
-import { hideIndexModal, showIndexModal, IndexModalState } from './index-modal';
-import { rpcBridge } from './rpc-bridge';
-import { showError } from './error-handler';
 import type { EnsureInitialIndexResponse, InitialIndexStatusEvent } from '../types/injected';
+import { showError } from './error-handler';
+import {
+    disposeIndexModal,
+    hideIndexModal,
+    IndexModalState,
+    showIndexModal,
+} from './index-modal';
+import { rpcBridge } from './rpc-bridge';
 
 const INITIAL_INDEX_EVENT = 'initial-index-status';
 
@@ -177,5 +182,5 @@ export function cleanupInitialIndexLifecycle(): void {
 
     requestPromise = null;
     frontendState = 'idle';
-    hideIndexModal();
+    disposeIndexModal();
 }

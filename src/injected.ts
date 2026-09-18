@@ -7,10 +7,10 @@
 const PROXY_PORT = 8080;
 
 import { hideAllErrors, showError } from './components/error-handler';
-import { checkBridgeHealth, rpcBridge } from './components/rpc-bridge';
 import {
     cleanupInitialIndexLifecycle,
 } from './components/initial-index';
+import { checkBridgeHealth, rpcBridge } from './components/rpc-bridge';
 import { initializeAppExtension } from './components/uiex-initializer';
 import type { MicroZoukeiAPI, MicroZoukeiInjectedState } from './types/injected';
 
@@ -44,6 +44,13 @@ const waitForMicroStudioLoad = (token: number): Promise<void> => {
     });
 };
 
+const waitForDomReady = async (): Promise<void> => {
+    if (document.body) return;
+    await new Promise<void>(resolve => {
+        document.addEventListener('DOMContentLoaded', () => resolve(), { once: true });
+    });
+};
+
 /**
  * Clean up all state owned by the currently injected script.
  */
@@ -72,6 +79,15 @@ export const cleanupInjectedScript = (): void => {
  */
 const initializeInjectedScript = async (): Promise<void> => {
     const token = ++initializationToken;
+
+    try {
+        await waitForDomReady();
+        if (token !== initializationToken) {
+            return;
+        }
+    } catch {
+        return;
+    }
 
     // Expose cleanup immediately so hot reload can stop this script before replacement.
     (window as unknown as { microZoukeiInjectedState?: MicroZoukeiInjectedState }).microZoukeiInjectedState = {

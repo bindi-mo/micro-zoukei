@@ -9,7 +9,7 @@ import { overrideProjectLoaded } from './project-files';
 
 let flag_morespace = false;
 let elm = null;
-let morespace_icon: HTMLElement = document.createElement("i");
+let morespace_icon: HTMLElement | null = null;
 let cachedCodeEditor: HTMLElement | null = null;
 let createdMoreSpaceIcon = false;
 let initializeAppExtensionCleanup: (() => void) | null = null;
@@ -131,6 +131,8 @@ const expose_morespace = (): void => {
 }
 
 const toggle_morespace = (): void => {
+    if (!morespace_icon) return;
+
     if (flag_morespace) {
         expose_morespace();
         morespace_icon.setAttribute('class', 'fas fa-expand-arrows-alt');
@@ -429,20 +431,19 @@ export const initializeAppExtension = async (): Promise<() => void> => {
     // step 2: add
     // -------------------------------------------
     // more space icon
-    elm = document.getElementById('project-morespace');
-    if (!elm) {
-        morespace_icon.setAttribute('class', 'fas fa-expand-arrows-alt');
-        morespace_icon.setAttribute('id', 'project-morespace');
-        morespace_icon.setAttribute('title', 'Toggle More Space');
-        morespace_icon.onclick = () => {
+    const projectIcon = document.getElementById('project-icon');
+    if (!document.getElementById('project-morespace') && projectIcon instanceof HTMLElement) {
+        const icon = document.createElement("i");
+        icon.setAttribute('class', 'fas fa-expand-arrows-alt');
+        icon.setAttribute('id', 'project-morespace');
+        icon.setAttribute('title', 'Toggle More Space');
+        icon.onclick = () => {
             toggle_morespace();
         }
 
-        elm = document.getElementById('project-icon');
-        if (elm && elm instanceof HTMLElement) {
-            elm.after(morespace_icon);
-            createdMoreSpaceIcon = true;
-        }
+        projectIcon.after(icon);
+        morespace_icon = icon;
+        createdMoreSpaceIcon = true;
     }
 
     // -------------------------------------------
@@ -495,16 +496,17 @@ export const initializeAppExtension = async (): Promise<() => void> => {
         restoreSetMainSection?.();
         cleanupInitialIndexLifecycle();
 
-        if (createdMoreSpaceIcon && morespace_icon.isConnected) {
+        if (createdMoreSpaceIcon && morespace_icon?.isConnected) {
             morespace_icon.remove();
         }
-        if (createdMoreSpaceIcon) {
+        if (morespace_icon) {
             morespace_icon.onclick = null;
         }
         if (createdMoreSpaceIcon) {
             flag_morespace = false;
         }
         createdMoreSpaceIcon = false;
+        morespace_icon = null;
         initializeAppExtensionCleanup = null;
     };
 

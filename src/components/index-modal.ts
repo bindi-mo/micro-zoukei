@@ -25,6 +25,8 @@ export class IndexModal {
     private progressBar: HTMLDivElement;
     private state: IndexModalState = IndexModalState.Idle;
     private active = false;
+    private mounted = false;
+    private listenersAttached = false;
     private originalScrollY = 0;
     private originalFocusElement: HTMLElement | null = null;
     private inertElements: InertElementState[] = [];
@@ -55,7 +57,6 @@ export class IndexModal {
             justify-content: center;
             backdrop-filter: blur(4px);
         `;
-        document.body.appendChild(this.overlay);
     }
 
     private initializeModal(): void {
@@ -123,32 +124,35 @@ export class IndexModal {
             if (this.active) event.preventDefault();
         }, { passive: false });
 
-        document.addEventListener('keydown', event => {
-            if (!this.active) return;
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                return;
-            }
-            if (event.key !== 'Tab') return;
-
-            const focusable = this.getFocusableElements();
-            if (focusable.length === 0) {
-                event.preventDefault();
-                this.modal.focus();
-                return;
-            }
-
-            const first = focusable[0];
-            const last = focusable[focusable.length - 1];
-            if (event.shiftKey && document.activeElement === first) {
-                event.preventDefault();
-                last.focus();
-            } else if (!event.shiftKey && document.activeElement === last) {
-                event.preventDefault();
-                first.focus();
-            }
-        }, { capture: true });
+        document.addEventListener('keydown', this.keydownHandler, { capture: true });
+        this.listenersAttached = true;
     }
+
+    private readonly keydownHandler = (event: KeyboardEvent): void => {
+        if (!this.active) return;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            return;
+        }
+        if (event.key !== 'Tab') return;
+
+        const focusable = this.getFocusableElements();
+        if (focusable.length === 0) {
+            event.preventDefault();
+            this.modal.focus();
+            return;
+        }
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    };
 
     private getFocusableElements(): HTMLElement[] {
         return Array.from(
@@ -158,14 +162,50 @@ export class IndexModal {
         );
     }
 
-    public show(state: IndexModalState, options: IndexModalOptions = {}): void {
-        this.state = state;
+    private mount(): boolean {
+        if (this.mounted) return true;
 
+        const body = document.body;
+        if (!body) return false;
+
+        body.appendChild(this.overlay);
+        this.mounted = true;
+        return true;
+    }
+
+    private restorePageState(): void {
+        if (document.body) {
+            document.body.style.overflow = '';
+        }
+        this.inertElements.forEach(({ element, wasInert }) => {
+            element.inert = wasInert;
+        });
+        this.inertElements = [];
+
+        try {
+            window.scrollTo(0, this.originalScrollY);
+        } catch {
+            // Some embedded webviews expose a non-functional scrollTo implementation.
+        }
+
+        if (this.originalFocusElement?.isConnected) {
+            this.originalFocusElement.focus();
+        } else {
+            this.modal.blur();
+        }
+        this.originalFocusElement = null;
+    }
+
+    public show(state: IndexModalState, options: IndexModalOptions = {}): void {
         if (state !== IndexModalState.InProgress) {
+            this.state = state;
             this.hide();
             return;
         }
 
+        if (!this.mount()) return;
+
+        this.state = state;
         if (!this.active) {
             this.active = true;
             this.originalScrollY = window.scrollY;
@@ -188,32 +228,12 @@ export class IndexModal {
     }
 
     public hide(): void {
-        if (!this.active) {
-            this.overlay.style.display = 'none';
-            return;
-        }
-
         this.overlay.style.display = 'none';
+        if (!this.active) return;
+
         this.active = false;
         this.modal.setAttribute('aria-busy', 'false');
-        document.body.style.overflow = '';
-        this.inertElements.forEach(({ element, wasInert }) => {
-            element.inert = wasInert;
-        });
-        this.inertElements = [];
-
-        try {
-            window.scrollTo(0, this.originalScrollY);
-        } catch {
-            // Some embedded webviews expose a non-functional scrollTo implementation.
-        }
-
-        if (this.originalFocusElement?.isConnected) {
-            this.originalFocusElement.focus();
-        } else {
-            this.modal.blur();
-        }
-        this.originalFocusElement = null;
+        this.restorePageState();
     }
 
     public updateProgress(percentage: number): void {
@@ -221,18 +241,46 @@ export class IndexModal {
         this.progressBar.style.width = `${value}%`;
         this.progressBar.parentElement?.setAttribute('aria-valuenow', String(value));
     }
+
+    public dispose(): void {
+        if (this.active) {
+            this.hide();
+        }
+
+        if (this.listenersAttached) {
+            document.removeEventListener('keydown', this.keydownHandler, { capture: true });
+            this.listenersAttached = false;
+        }
+
+        this.overlay.remove();
+        this.mounted = false;
+        this.state = IndexModalState.Idle;
+        this.originalScrollY = 0;
+        this.originalFocusElement = null;
+        this.inertElements = [];
+    }
 }
 
-export const indexModal = new IndexModal();
+let indexModal: IndexModal | undefined;
+
+const getIndexModal = (): IndexModal => {
+    indexModal ??= new IndexModal();
+    return indexModal;
+};
 
 export function showIndexModal(state: IndexModalState, options?: IndexModalOptions): void {
-    indexModal.show(state, options ?? {});
+    getIndexModal().show(state, options ?? {});
 }
 
 export function hideIndexModal(): void {
-    indexModal.hide();
+    indexModal?.hide();
 }
 
 export function updateIndexProgress(percentage: number): void {
-    indexModal.updateProgress(percentage);
+    indexModal?.updateProgress(percentage);
+}
+
+export function disposeIndexModal(): void {
+    indexModal?.dispose();
+    indexModal = undefined;
 }

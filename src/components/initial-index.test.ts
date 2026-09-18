@@ -1,13 +1,13 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { listen } from '@tauri-apps/api/event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EnsureInitialIndexResponse } from '../types/injected';
+import { IndexModalState, showIndexModal } from './index-modal';
 import {
+    cleanupInitialIndexLifecycle,
     getFrontendRequestState,
     handleInitialIndexResponse,
-    handleInitialIndexStatus,
-    requestInitialIndexStatus,
-    cleanupInitialIndexLifecycle,
+    handleInitialIndexStatus
 } from './initial-index';
-import type { EnsureInitialIndexResponse, InitialIndexStatusEvent } from '../types/injected';
 
 const mockedListen = vi.mocked(listen);
 
@@ -31,6 +31,7 @@ describe('initial-index lifecycle coordinator', () => {
 
     afterEach(() => {
         cleanupInitialIndexLifecycle();
+        vi.restoreAllMocks();
     });
 
     it('starts in the idle state', () => {
@@ -59,6 +60,22 @@ describe('initial-index lifecycle coordinator', () => {
         handleInitialIndexStatus({ status: 'failed', error: 'boom' });
         expect(getFrontendRequestState()).toBe('failed');
         cleanupInitialIndexLifecycle();
+        expect(getFrontendRequestState()).toBe('idle');
+    });
+
+    it('disposes the index modal during lifecycle cleanup', () => {
+        vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
+            callback(0);
+            return 0;
+        });
+
+        expect(document.getElementById('micro-zoukei-index-overlay')).toBeNull();
+        showIndexModal(IndexModalState.InProgress);
+        expect(document.getElementById('micro-zoukei-index-overlay')).not.toBeNull();
+
+        cleanupInitialIndexLifecycle();
+
+        expect(document.getElementById('micro-zoukei-index-overlay')).toBeNull();
         expect(getFrontendRequestState()).toBe('idle');
     });
 

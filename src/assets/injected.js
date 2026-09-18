@@ -278,6 +278,8 @@ var InjectedScript = (function(exports) {
     progressBar;
     state = 0;
     active = false;
+    mounted = false;
+    listenersAttached = false;
     originalScrollY = 0;
     originalFocusElement = null;
     inertElements = [];
@@ -305,7 +307,6 @@ var InjectedScript = (function(exports) {
             justify-content: center;
             backdrop-filter: blur(4px);
         `;
-      document.body.appendChild(this.overlay);
     }
     initializeModal() {
       this.modal.id = "micro-zoukei-index-modal";
@@ -363,30 +364,32 @@ var InjectedScript = (function(exports) {
       this.overlay.addEventListener("touchmove", (event) => {
         if (this.active) event.preventDefault();
       }, { passive: false });
-      document.addEventListener("keydown", (event) => {
-        if (!this.active) return;
-        if (event.key === "Escape") {
-          event.preventDefault();
-          return;
-        }
-        if (event.key !== "Tab") return;
-        const focusable = this.getFocusableElements();
-        if (focusable.length === 0) {
-          event.preventDefault();
-          this.modal.focus();
-          return;
-        }
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }, { capture: true });
+      document.addEventListener("keydown", this.keydownHandler, { capture: true });
+      this.listenersAttached = true;
     }
+    keydownHandler = (event) => {
+      if (!this.active) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = this.getFocusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        this.modal.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
     getFocusableElements() {
       return Array.from(
         this.modal.querySelectorAll(
@@ -394,12 +397,41 @@ var InjectedScript = (function(exports) {
         )
       );
     }
+    mount() {
+      if (this.mounted) return true;
+      const body = document.body;
+      if (!body) return false;
+      body.appendChild(this.overlay);
+      this.mounted = true;
+      return true;
+    }
+    restorePageState() {
+      if (document.body) {
+        document.body.style.overflow = "";
+      }
+      this.inertElements.forEach(({ element, wasInert }) => {
+        element.inert = wasInert;
+      });
+      this.inertElements = [];
+      try {
+        window.scrollTo(0, this.originalScrollY);
+      } catch {
+      }
+      if (this.originalFocusElement?.isConnected) {
+        this.originalFocusElement.focus();
+      } else {
+        this.modal.blur();
+      }
+      this.originalFocusElement = null;
+    }
     show(state, options = {}) {
-      this.state = state;
       if (state !== 1) {
+        this.state = state;
         this.hide();
         return;
       }
+      if (!this.mount()) return;
+      this.state = state;
       if (!this.active) {
         this.active = true;
         this.originalScrollY = window.scrollY;
@@ -416,41 +448,47 @@ var InjectedScript = (function(exports) {
       this.statusElement.textContent = options.message || "Indexing knowledge base...";
     }
     hide() {
-      if (!this.active) {
-        this.overlay.style.display = "none";
-        return;
-      }
       this.overlay.style.display = "none";
+      if (!this.active) return;
       this.active = false;
       this.modal.setAttribute("aria-busy", "false");
-      document.body.style.overflow = "";
-      this.inertElements.forEach(({ element, wasInert }) => {
-        element.inert = wasInert;
-      });
-      this.inertElements = [];
-      try {
-        window.scrollTo(0, this.originalScrollY);
-      } catch {
-      }
-      if (this.originalFocusElement?.isConnected) {
-        this.originalFocusElement.focus();
-      } else {
-        this.modal.blur();
-      }
-      this.originalFocusElement = null;
+      this.restorePageState();
     }
     updateProgress(percentage) {
       const value = Math.max(0, Math.min(100, percentage));
       this.progressBar.style.width = `${value}%`;
       this.progressBar.parentElement?.setAttribute("aria-valuenow", String(value));
     }
+    dispose() {
+      if (this.active) {
+        this.hide();
+      }
+      if (this.listenersAttached) {
+        document.removeEventListener("keydown", this.keydownHandler, { capture: true });
+        this.listenersAttached = false;
+      }
+      this.overlay.remove();
+      this.mounted = false;
+      this.state = 0;
+      this.originalScrollY = 0;
+      this.originalFocusElement = null;
+      this.inertElements = [];
+    }
   }
-  const indexModal = new IndexModal();
+  let indexModal;
+  const getIndexModal = () => {
+    indexModal ??= new IndexModal();
+    return indexModal;
+  };
   function showIndexModal(state, options) {
-    indexModal.show(state, options ?? {});
+    getIndexModal().show(state, options ?? {});
   }
   function hideIndexModal() {
-    indexModal.hide();
+    indexModal?.hide();
+  }
+  function disposeIndexModal() {
+    indexModal?.dispose();
+    indexModal = void 0;
   }
   const INITIAL_INDEX_EVENT = "initial-index-status";
   let frontendState = "idle";
@@ -570,7 +608,7 @@ var InjectedScript = (function(exports) {
       void pendingRegistration.catch(() => void 0);
     }
     frontendState = "idle";
-    hideIndexModal();
+    disposeIndexModal();
   }
   class LogicalSize {
     constructor(...args) {
@@ -3504,7 +3542,7 @@ var InjectedScript = (function(exports) {
   };
   let flag_morespace = false;
   let elm = null;
-  let morespace_icon = document.createElement("i");
+  let morespace_icon = null;
   let cachedCodeEditor = null;
   let createdMoreSpaceIcon = false;
   let initializeAppExtensionCleanup = null;
@@ -3608,6 +3646,7 @@ var InjectedScript = (function(exports) {
     visible_terminal_toolbar(true);
   };
   const toggle_morespace = () => {
+    if (!morespace_icon) return;
     if (flag_morespace) {
       expose_morespace();
       morespace_icon.setAttribute("class", "fas fa-expand-arrows-alt");
@@ -3812,19 +3851,18 @@ var InjectedScript = (function(exports) {
     const generation = ++initializationGeneration;
     await startInitialIndexEventListening();
     removeElements();
-    elm = document.getElementById("project-morespace");
-    if (!elm) {
-      morespace_icon.setAttribute("class", "fas fa-expand-arrows-alt");
-      morespace_icon.setAttribute("id", "project-morespace");
-      morespace_icon.setAttribute("title", "Toggle More Space");
-      morespace_icon.onclick = () => {
+    const projectIcon = document.getElementById("project-icon");
+    if (!document.getElementById("project-morespace") && projectIcon instanceof HTMLElement) {
+      const icon = document.createElement("i");
+      icon.setAttribute("class", "fas fa-expand-arrows-alt");
+      icon.setAttribute("id", "project-morespace");
+      icon.setAttribute("title", "Toggle More Space");
+      icon.onclick = () => {
         toggle_morespace();
       };
-      elm = document.getElementById("project-icon");
-      if (elm && elm instanceof HTMLElement) {
-        elm.after(morespace_icon);
-        createdMoreSpaceIcon = true;
-      }
+      projectIcon.after(icon);
+      morespace_icon = icon;
+      createdMoreSpaceIcon = true;
     }
     elm = document.getElementsByTagName("header")[0];
     const style = window.getComputedStyle(elm);
@@ -3858,16 +3896,17 @@ var InjectedScript = (function(exports) {
       }
       restoreSetMainSection?.();
       cleanupInitialIndexLifecycle();
-      if (createdMoreSpaceIcon && morespace_icon.isConnected) {
+      if (createdMoreSpaceIcon && morespace_icon?.isConnected) {
         morespace_icon.remove();
       }
-      if (createdMoreSpaceIcon) {
+      if (morespace_icon) {
         morespace_icon.onclick = null;
       }
       if (createdMoreSpaceIcon) {
         flag_morespace = false;
       }
       createdMoreSpaceIcon = false;
+      morespace_icon = null;
       initializeAppExtensionCleanup = null;
     };
     initializeAppExtensionCleanup = cleanup;
@@ -3898,6 +3937,12 @@ var InjectedScript = (function(exports) {
       check();
     });
   };
+  const waitForDomReady = async () => {
+    if (document.body) return;
+    await new Promise((resolve) => {
+      document.addEventListener("DOMContentLoaded", () => resolve(), { once: true });
+    });
+  };
   const cleanupInjectedScript = () => {
     initializationToken += 1;
     clearPendingInitialization();
@@ -3915,6 +3960,14 @@ var InjectedScript = (function(exports) {
   };
   const initializeInjectedScript = async () => {
     const token = ++initializationToken;
+    try {
+      await waitForDomReady();
+      if (token !== initializationToken) {
+        return;
+      }
+    } catch {
+      return;
+    }
     window.microZoukeiInjectedState = {
       cleanup: cleanupInjectedScript
     };
