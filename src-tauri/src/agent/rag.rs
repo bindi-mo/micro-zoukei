@@ -683,7 +683,6 @@ pub async fn validate_my_documents_table(
         .await?;
 
     let expected_provider = expected_provider.trim().to_ascii_lowercase();
-    let expected_model = expected_model;
 
     for batch in &batches {
         let provider_array = batch
