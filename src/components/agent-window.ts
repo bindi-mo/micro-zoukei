@@ -19,8 +19,8 @@ const createChatMarkup = (): string => {
     return `
     <div class="agent-chat-container" style="display: flex; flex-direction: column; height: 100%; color: #fff; font-family: sans-serif;">
       <!-- header -->
-      <div style="padding: 15px; border-bottom: 1px solid #333; background: #252526;">
-        <h3 style="margin: 0; font-size: 16px;">🤖 AI Coding Agent</h3>
+      <div style="padding: 15px; border-bottom: 1px solid #333; background: hsl(200, 30%, 30%);">
+        <h3 style="margin: 0; font-size: 16px;">AI Coding Agent</h3>
       </div>
 
       <!-- Message display area -->
@@ -129,10 +129,34 @@ export const setupAgentChatWindow = (): void => {
     // Generate the base for the chat window.
     const chatWindow = document.createElement('div');
     chatWindow.id = 'agent-chat-window';
+    chatWindow.style.position = 'absolute';
     chatWindow.style.display = 'none'; // Initially, it is hidden (controlled by setSection).
-    chatWindow.style.width = '100%';
+    chatWindow.style.width = '571px';
     chatWindow.style.height = '100%';
     chatWindow.style.backgroundColor = '#1e1e1e';
+
+    // Calculate and update chatWindow width
+    const updateWidth = (): void => {
+        const sidemenuBar = document.getElementById('sidemenu');
+        let width = 0;
+        // see visible_sidemenu()
+        const sidemenuWidth = (sidemenuBar && sidemenuBar.style.left !== '-60px')
+            ? sidemenuBar.clientWidth
+            : 0;
+        const runtimeContainer = document.getElementById('runtime-container');
+        const runtimeWidth = runtimeContainer ? runtimeContainer.clientWidth : 0;
+        const codeSplitbar = document.getElementById('code-splitbar');
+        const splitbarWidth = codeSplitbar ? codeSplitbar.clientWidth : 0;
+        const offsetWidth = sidemenuWidth + runtimeWidth + splitbarWidth;
+
+        if (offsetWidth > 0) {
+            const mainWidth = window.innerWidth - offsetWidth;
+            chatWindow.style.width = `${mainWidth}px`;
+        }
+    };
+
+    // Recalculate width on window resize
+    window.addEventListener('resize', updateWidth);
 
     // Inject the markup and add it to the DOM.
     chatWindow.innerHTML = createChatMarkup();

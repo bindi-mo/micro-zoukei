@@ -3338,8 +3338,8 @@ var InjectedScript = (function(exports) {
     return `
     <div class="agent-chat-container" style="display: flex; flex-direction: column; height: 100%; color: #fff; font-family: sans-serif;">
       <!-- header -->
-      <div style="padding: 15px; border-bottom: 1px solid #333; background: #252526;">
-        <h3 style="margin: 0; font-size: 16px;">🤖 AI Coding Agent</h3>
+      <div style="padding: 15px; border-bottom: 1px solid #333; background: hsl(200, 30%, 30%);">
+        <h3 style="margin: 0; font-size: 16px;">AI Coding Agent</h3>
       </div>
 
       <!-- Message display area -->
@@ -3409,10 +3409,25 @@ var InjectedScript = (function(exports) {
     if (document.getElementById("agent-chat-window")) return;
     const chatWindow = document.createElement("div");
     chatWindow.id = "agent-chat-window";
+    chatWindow.style.position = "absolute";
     chatWindow.style.display = "none";
-    chatWindow.style.width = "100%";
+    chatWindow.style.width = "571px";
     chatWindow.style.height = "100%";
     chatWindow.style.backgroundColor = "#1e1e1e";
+    const updateWidth = () => {
+      const sidemenuBar = document.getElementById("sidemenu");
+      const sidemenuWidth = sidemenuBar && sidemenuBar.style.left !== "-60px" ? sidemenuBar.clientWidth : 0;
+      const runtimeContainer = document.getElementById("runtime-container");
+      const runtimeWidth = runtimeContainer ? runtimeContainer.clientWidth : 0;
+      const codeSplitbar = document.getElementById("code-splitbar");
+      const splitbarWidth = codeSplitbar ? codeSplitbar.clientWidth : 0;
+      const offsetWidth = sidemenuWidth + runtimeWidth + splitbarWidth;
+      if (offsetWidth > 0) {
+        const mainWidth = window.innerWidth - offsetWidth;
+        chatWindow.style.width = `${mainWidth}px`;
+      }
+    };
+    window.addEventListener("resize", updateWidth);
     chatWindow.innerHTML = createChatMarkup();
     codeSection.appendChild(chatWindow);
     const sendBtn = chatWindow.querySelector("#chat-send-button");
