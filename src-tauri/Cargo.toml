@@ -39,7 +39,7 @@ url = "2.5.8"
 base64 = "0.23.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 walkdir = "2.5"
-rig = { version = "0.42.0", features = ["lancedb"] }
+rig = { version = "0.42.0", features = ["lancedb", "test-utils"] }
 lancedb = "0.30"
 arrow-array = "58"
 arrow-schema = "58"

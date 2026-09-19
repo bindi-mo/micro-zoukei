@@ -43,9 +43,9 @@ async fn handle_rag_reindex(
     }
 }
 
-pub enum SupportedClient {
+pub enum SupportedClient<H = reqwest::Client> {
     OpenAi(openai::Client),
-    Ollama(ollama::Client),
+    Ollama(ollama::Client<H>),
     OpenRouter(openrouter::Client),
 }
 #[derive(Debug)]
@@ -69,6 +69,7 @@ pub enum RagIndexError {
         expected: usize,
         actual: usize,
     },
+    EmbeddingProbe(rig::embeddings::EmbeddingError),
     Arrow(lancedb::arrow::arrow_schema::ArrowError),
 }
 
@@ -114,6 +115,7 @@ impl std::fmt::Display for RagIndexError {
                 expected,
                 actual
             ),
+            Self::EmbeddingProbe(error) => write!(formatter, "Embedding probe failed: {}", error),
             Self::Arrow(error) => write!(formatter, "Arrow error: {}", error),
         }
     }
@@ -122,6 +124,7 @@ impl std::fmt::Display for RagIndexError {
 impl std::error::Error for RagIndexError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::EmbeddingProbe(error) => Some(error),
             Self::Arrow(error) => Some(error),
             _ => None,
         }
@@ -150,11 +153,33 @@ fn validate_embedding_dimensions(
     Ok(dims)
 }
 
-fn resolve_embedding_dimensions(
+const OLLAMA_DIMENSION_PROBE_TEXT: &str = "dimension check";
+
+fn embedding_dimensions_from_vector(
     provider: &str,
     model_name: &str,
-    client: &SupportedClient,
+    embedding: &Embedding,
 ) -> Result<usize, RagIndexError> {
+    let dims = embedding.vec.len();
+    if dims == 0 {
+        return Err(RagIndexError::UnknownModel {
+            provider: provider.to_string(),
+            model: model_name.to_string(),
+            dims,
+        });
+    }
+
+    validate_embedding_dimensions(provider, model_name, dims)
+}
+
+async fn resolve_embedding_dimensions<H>(
+    provider: &str,
+    model_name: &str,
+    client: &SupportedClient<H>,
+) -> Result<usize, RagIndexError>
+where
+    H: rig::http_client::HttpClientExt + Clone + 'static,
+{
     let normalized_provider = provider.trim().to_ascii_lowercase();
     match normalized_provider.as_str() {
         "openai" | "ollama" | "openrouter" => {}
@@ -165,27 +190,39 @@ fn resolve_embedding_dimensions(
         }
     }
 
-    let dims = match client {
-        SupportedClient::OpenAi(client) => client.embedding_model(model_name).ndims(),
-        SupportedClient::Ollama(client) => {
-            let lookup_model = model_name.split(':').next().unwrap_or(model_name);
-            match lookup_model {
-                "nomic-embed-text" => 768,
-                _ => client.embedding_model(model_name).ndims(),
+    match client {
+        SupportedClient::OpenAi(client) => {
+            let dims = client.embedding_model(model_name).ndims();
+            if dims == 0 {
+                return Err(RagIndexError::UnknownModel {
+                    provider: normalized_provider,
+                    model: model_name.to_string(),
+                    dims,
+                });
             }
+            validate_embedding_dimensions(&normalized_provider, model_name, dims)
         }
-        SupportedClient::OpenRouter(client) => client.embedding_model(model_name).ndims(),
-    };
+        SupportedClient::OpenRouter(client) => {
+            let dims = client.embedding_model(model_name).ndims();
+            if dims == 0 {
+                return Err(RagIndexError::UnknownModel {
+                    provider: normalized_provider,
+                    model: model_name.to_string(),
+                    dims,
+                });
+            }
+            validate_embedding_dimensions(&normalized_provider, model_name, dims)
+        }
+        SupportedClient::Ollama(client) => {
+            let probe_model = client.embedding_model(model_name);
+            let embedding = probe_model
+                .embed_text(OLLAMA_DIMENSION_PROBE_TEXT)
+                .await
+                .map_err(RagIndexError::EmbeddingProbe)?;
 
-    if dims == 0 {
-        return Err(RagIndexError::UnknownModel {
-            provider: normalized_provider,
-            model: model_name.to_string(),
-            dims,
-        });
+            embedding_dimensions_from_vector(&normalized_provider, model_name, &embedding)
+        }
     }
-
-    validate_embedding_dimensions(&normalized_provider, model_name, dims)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -328,7 +365,8 @@ pub async fn rag_inject_documents(
 
     let total_count = documents.len();
     let client_enum = create_llm_client(provider)?;
-    let expected_dims = resolve_embedding_dimensions(provider, embedding_model_name, &client_enum)?;
+    let expected_dims =
+        resolve_embedding_dimensions(provider, embedding_model_name, &client_enum).await?;
 
     // Shared macro to avoid duplicating vector injection code
     macro_rules! inject_with_client {
@@ -370,7 +408,8 @@ pub async fn rag_query_answer(
     let db = lancedb::connect(db_uri).execute().await?;
     let table = db.open_table("my_documents").execute().await?;
     let client_enum = create_llm_client(provider)?;
-    let expected_dims = resolve_embedding_dimensions(provider, embedding_model_name, &client_enum)?;
+    let expected_dims =
+        resolve_embedding_dimensions(provider, embedding_model_name, &client_enum).await?;
 
     let preamble =
         "You are an excellent assistant who answers questions based on the provided documents.";
@@ -670,7 +709,8 @@ pub async fn ensure_initial_index(
     db_uri: &str,
 ) -> Result<TableValidationResult, Box<dyn std::error::Error>> {
     let client_enum = create_llm_client(provider)?;
-    let expected_dims = resolve_embedding_dimensions(provider, embedding_model_name, &client_enum)?;
+    let expected_dims =
+        resolve_embedding_dimensions(provider, embedding_model_name, &client_enum).await?;
 
     // First, validate existing table
     let validation = validate_my_documents_table(db_uri, expected_dims).await?;
@@ -736,6 +776,7 @@ mod tests {
     use super::*;
     use arrow_array::types::Int64Type;
     use arrow_array::{ArrayRef, FixedSizeListArray, Int64Array, RecordBatch, StringArray};
+    use rig::test_utils::{MockHttpResponse, SequencedHttpClient};
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -743,47 +784,62 @@ mod tests {
         SupportedClient::Ollama(ollama::Client::new("").unwrap())
     }
 
-    #[test]
-    fn resolves_tagged_and_untagged_nomic_embeddings_to_768_dimensions() {
-        let client = ollama_client();
+    fn mock_ollama_client(
+        responses: impl IntoIterator<Item = MockHttpResponse>,
+    ) -> (SupportedClient<SequencedHttpClient>, SequencedHttpClient) {
+        let http_client = SequencedHttpClient::new(responses);
+        let client = ollama::Client::builder()
+            .api_key("")
+            .base_url("http://localhost:11434")
+            .http_client(http_client.clone())
+            .build()
+            .unwrap();
 
+        (SupportedClient::Ollama(client), http_client)
+    }
+
+    fn ollama_embedding_response(dimensions: usize) -> MockHttpResponse {
+        let embedding = (0..dimensions)
+            .map(|value| value as f64)
+            .collect::<Vec<_>>();
+        MockHttpResponse::success(
+            serde_json::json!({
+                "model": "custom-embedding:latest",
+                "embeddings": [embedding],
+            })
+            .to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn derives_ollama_dimensions_from_probe_vector() {
+        let (client, http_client) = mock_ollama_client([ollama_embedding_response(5)]);
+
+        let dimensions =
+            resolve_embedding_dimensions(" OLLAMA ", "custom-embedding:latest", &client)
+                .await
+                .unwrap();
+
+        assert_eq!(dimensions, 5);
+        let requests = http_client.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].uri.ends_with("/api/embed"));
+
+        let request: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(request["model"], "custom-embedding:latest");
         assert_eq!(
-            resolve_embedding_dimensions("ollama", "nomic-embed-text:latest", &client).unwrap(),
-            768
-        );
-        assert_eq!(
-            resolve_embedding_dimensions("OLLAMA", "nomic-embed-text", &client).unwrap(),
-            768
+            request["input"],
+            serde_json::json!([OLLAMA_DIMENSION_PROBE_TEXT])
         );
     }
 
-    #[test]
-    fn preserves_the_original_ollama_model_identifier_on_explicit_model() {
-        let model = ollama::Client::new("")
-            .unwrap()
-            .embedding_model_with_ndims("nomic-embed-text:latest", 768);
+    #[tokio::test]
+    async fn rejects_an_empty_ollama_probe_vector() {
+        let (client, _) = mock_ollama_client([ollama_embedding_response(0)]);
 
-        assert_eq!(model.model, "nomic-embed-text:latest");
-        assert_eq!(model.ndims(), 768);
-    }
-
-    #[test]
-    fn rejects_an_unsupported_provider_before_model_resolution() {
-        let error =
-            resolve_embedding_dimensions("unknown", "nomic-embed-text:latest", &ollama_client())
-                .unwrap_err();
-
-        assert!(matches!(
-            error,
-            RagIndexError::UnsupportedProvider { provider } if provider == "unknown"
-        ));
-    }
-
-    #[test]
-    fn rejects_an_unknown_embedding_model() {
-        let error =
-            resolve_embedding_dimensions("ollama", "unknown-embedding-model", &ollama_client())
-                .unwrap_err();
+        let error = resolve_embedding_dimensions("ollama", "unknown-embedding-model", &client)
+            .await
+            .unwrap_err();
 
         assert!(matches!(
             error,
@@ -792,6 +848,19 @@ mod tests {
                 model,
                 dims: 0,
             } if provider == "ollama" && model == "unknown-embedding-model"
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_an_unsupported_provider_before_model_resolution() {
+        let error =
+            resolve_embedding_dimensions("unknown", "nomic-embed-text:latest", &ollama_client())
+                .await
+                .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RagIndexError::UnsupportedProvider { provider } if provider == "unknown"
         ));
     }
 
