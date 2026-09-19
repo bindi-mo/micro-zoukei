@@ -1,4 +1,4 @@
-# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.3.0
+# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.3.1
 
 ## 1. System Overview
 
@@ -294,14 +294,29 @@ logger:
   diff: info
 ```
 
-Each logger module accepts `off`, `error`, `warn`, `info`, `debug`, or `trace`.
-The severity order is `trace < debug < info < warn < error`; a module emits
+Each logger category accepts `off`, `error`, `warn`, `info`, `debug`, or `trace`.
+The severity order is `trace < debug < info < warn < error`; a category emits
 records at or above its configured threshold, while `off` suppresses all records.
-Omitting `logger` or individual module fields defaults each module to `info`.
+Omitting `logger` or individual category fields defaults each category to `info`.
+
+Additional categories can be added with `logger.<top_level_module>: <level>`,
+where the name must match a Rust top-level module exactly. For example,
+`logger.network: debug` applies to `micro_studio_agent_lib::network::*`. A
+category that does not match a Rust module is accepted but produces no logs,
+because Rust modules cannot be enumerated at runtime. The internal crate prefix
+and crate-qualified names must not be configured; only short logical names are
+used.
+
+```yaml
+logger:
+  network: debug
+  initial_index: warn
+```
 
 `config.yml` is the sole filter source. The logger uses `env_logger::Builder::new()`
-and does not read or merge `RUST_LOG`. It retains `env_logger`'s standard console
-formatter rather than the former custom `[MODULE] [LEVEL] message` format.
+and does not read or merge `RUST_LOG`. It applies a custom formatter that prints
+the timestamp, level, and short category, for example
+`2026-09-19 12:34:56 [INFO] [proxy] Started on http://127.0.0.1:8080`.
 
 The injected frontend sends explicit records through `rpcBridge.logMessage`.
 Rust accepts only lowercase `info`, `warn`, and `error`, emits them with the
@@ -337,21 +352,36 @@ and builds two `env_logger::Logger` instances with identical filters. One target
 stdout and the other stderr. `env_logger::Builder::new()` is used deliberately,
 so `RUST_LOG` is neither read nor merged with application configuration.
 
-Target mapping uses the actual library crate name from `env!("CARGO_CRATE_NAME")`.
-The `frontend` target is literal; `tauri` maps to the crate root; `proxy`, `agent`,
-and `diff` map to their crate-qualified module prefixes; and both `commands` and
-`handlers` share the `commands` threshold. This preserves module ownership without
-a custom caller-classification macro.
+`LoggerConfig` carries the six built-in categories plus a flattened
+`BTreeMap<String, LogLevel>` for additional categories. `target_directives`
+generates crate-qualified internal targets from both sources. The `frontend`
+target is literal; `tauri` maps to the crate root; `proxy`, `agent`, and `diff`
+map to their crate-qualified module prefixes; and `commands` is canonical, with
+`handlers` always sharing the `commands` threshold. A dynamic `handlers` entry is
+ignored. Dynamic categories map to `crate::<category>`. The internal crate prefix
+is never exposed in configuration or output.
+
+`build_logger` installs a custom formatter that derives the displayed category
+via `classify_record`, without changing Rust call sites. Frontend IPC records are
+detected first by their explicit `frontend` target, because browser-originated
+records have no Rust module path. All other records are classified by
+`record.module_path()` via `classify_module`: the crate root displays as `tauri`,
+configured top-level modules display by their configured names, `handlers`
+displays as `commands`, and unconfigured crate modules display as `tauri`. The
+formatter prints the timestamp, level, and short category.
 
 A private `SplitLogger` implements the `log::Log` facade over both child loggers.
 Its `enabled`, `log`, and `flush` methods delegate consistently. It selects the
 stderr child only for `log::Level::Error`; every other level uses stdout. The
-global maximum level is the most verbose non-`Off` configured threshold.
+global maximum level is the most verbose non-`Off` configured threshold,
+including dynamic categories, so a dynamic `trace` category is not suppressed
+when all other categories are disabled.
 
 Rust call sites use the standard `log::trace!`, `log::debug!`, `log::info!`,
-`log::warn!`, and `log::error!` macros. Frontend IPC records use an explicit
-`target: "frontend"`. Diff persistence failures remain emitted from `diff.rs`,
-so they use the `diff` target rather than the wrapping command handler's target.
+`log::warn!`, and `log::error!` macros without `target:`. Frontend IPC records
+use an explicit `target: "frontend"` because browser-originated records have no
+Rust module path. Diff persistence failures remain emitted from `diff.rs`, so
+they display as `diff` rather than the wrapping command handler's category.
 
 ---
 
@@ -374,6 +404,20 @@ so they use the `diff` target rather than the wrapping command handler's target.
 | v1.2.8 | 2026-09-17 | Reworked logging to infer Rust modules from `module_path!()`, added frontend-specific logging, and moved diff failure logging into `diff.rs` |
 | v1.2.9 | 2026-09-18 | Replaced the custom logger with `log`/`env_logger`, retained typed module filters, and routed only errors to stderr |
 | v1.3.0 | 2026-09-19 | Index identity persistence, load-time validation, staleness detection, auto-rebuild, rebuild trigger scope docs |
+| v1.3.1 | 2026-09-19 | Short log category design: targetless Rust logs, module-path classification, dynamic categories, `handlers`→`commands` alias, custom level/category formatter |
+
+---
+
+### Summary of Changes (v1.3.0 → v1.3.1)
+
+| Item | Change Description |
+|---|---|
+| **Targetless Logs** | Normal Rust log calls omit `target:`; categories are derived from `module_path` |
+| **Dynamic Categories** | Added a flattened `BTreeMap<String, LogLevel>` for `logger.<top_level_module>` entries |
+| **Classification** | Added `classify_module`/`classify_record`; crate root and unknown modules display as `tauri`, `handlers` as `commands`, frontend IPC as `frontend` |
+| **Alias** | `commands` remains canonical; `handlers` always shares the `commands` threshold and is not independently configurable |
+| **Formatter** | Replaced the standard formatter with a custom timestamp/level/short-category format |
+| **Max Level** | `highest_configured_level` includes dynamic categories so a dynamic `trace` category is not suppressed |
 
 ---
 

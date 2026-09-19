@@ -36,10 +36,10 @@ unexpected partial state.
 
 ### Logger Configuration
 
-Runtime logs use the standard `log` facade with `env_logger` and per-module
-severity thresholds loaded from `config.yml`. The supported targets are
-`frontend`, `tauri`, `proxy`, `agent`, `commands`, and `diff`. Each module
-accepts `off`, `error`, `warn`, `info`, `debug`, or `trace`; omitted modules
+Runtime logs use the standard `log` facade with `env_logger` and per-category
+severity thresholds loaded from `config.yml`. The built-in categories are
+`frontend`, `tauri`, `proxy`, `agent`, `commands`, and `diff`. Each category
+accepts `off`, `error`, `warn`, `info`, `debug`, or `trace`; omitted categories
 default to `info`.
 
 ```yaml
@@ -52,19 +52,53 @@ logger:
   diff: info
 ```
 
-A module emits records at or above its configured threshold. `off` suppresses
-all records for that module. `config.yml` is the only filter source: the logger
+A category emits records at or above its configured threshold. `off` suppresses
+all records for that category. `config.yml` is the only filter source: the logger
 does not read or merge `RUST_LOG`.
 
+#### Additional Categories
+
+Extra categories can be added with `logger.<top_level_module>: <level>`. The name
+must match a Rust top-level module exactly, for example `logger.network: debug`
+applies to `micro_studio_agent_lib::network::*`.
+
+```yaml
+logger:
+  network: debug
+  initial_index: warn
+```
+
+A category that does not match a Rust module is accepted but produces no logs,
+because Rust modules cannot be enumerated at runtime. Do not configure the
+internal crate prefix (`micro_studio_agent_lib`) or crate-qualified names; use
+only the short logical names.
+
+#### Category Mapping
+
+Normal Rust logs omit `target:` and are classified automatically from the
+record's module path:
+
+- `frontend` is the literal target used only by frontend IPC records.
+- `tauri` is the crate root and the fallback for any unconfigured crate module
+  (for example `initial_index` and `network`).
+- `proxy`, `agent`, and `diff` map to their crate-qualified module prefixes.
+- `commands` is canonical; `handlers` is an alias and always shares the
+  `commands` threshold. A dynamic `handlers` entry is ignored.
+
+#### Output Format
+
 After `ConfigState` is committed at startup, `config::init_logger` builds two
-`env_logger` instances with identical module filters. One writes to stdout and
-the other to stderr. The standard `env_logger` formatter is used.
+`env_logger` instances with identical category filters. One writes to stdout and
+the other to stderr. A custom formatter prints the timestamp, level, and short
+category:
+
+```
+2026-09-19 12:34:56 [INFO] [proxy] Started on http://127.0.0.1:8080
+```
 
 Rust modules emit through `log::trace!`, `log::debug!`, `log::info!`,
-`log::warn!`, and `log::error!`. Filters use the actual crate prefix
-`micro_studio_agent_lib`; `proxy`, `agent`, and `diff` have their own targets,
-while `commands` and `handlers` share the `commands` threshold. Diff persistence
-failures are emitted from `diff.rs`, so they use the `diff` target.
+`log::warn!`, and `log::error!`. Diff persistence failures are emitted from
+`diff.rs`, so they display as `diff`.
 
 Frontend records arrive through `rpcBridge.logMessage(level, message)`. Rust
 accepts only lowercase `info`, `warn`, and `error`, emits them with the explicit

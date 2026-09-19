@@ -1,6 +1,8 @@
 use noyalib;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -160,6 +162,8 @@ pub struct LoggerConfig {
     pub commands: LogLevel,
     #[serde(default)]
     pub diff: LogLevel,
+    #[serde(flatten)]
+    pub dynamic: BTreeMap<String, LogLevel>,
 }
 
 impl Default for LoggerConfig {
@@ -171,45 +175,120 @@ impl Default for LoggerConfig {
             agent: LogLevel::Info,
             commands: LogLevel::Info,
             diff: LogLevel::Info,
+            dynamic: BTreeMap::new(),
         }
     }
 }
 
-fn target_directives(config: &LoggerConfig) -> Vec<(String, log::LevelFilter)> {
+pub fn target_directives(config: &LoggerConfig) -> Vec<(String, log::LevelFilter)> {
     let crate_prefix = env!("CARGO_CRATE_NAME");
-    vec![
+    let mut directives = vec![
         ("frontend".to_string(), config.frontend.into()),
         (crate_prefix.to_string(), config.tauri.into()),
         (format!("{crate_prefix}::proxy"), config.proxy.into()),
         (format!("{crate_prefix}::agent"), config.agent.into()),
         (format!("{crate_prefix}::commands"), config.commands.into()),
+        // handlers is an alias of commands: it is not independently
+        // configurable, but its records must honor the commands threshold.
         (format!("{crate_prefix}::handlers"), config.commands.into()),
         (format!("{crate_prefix}::diff"), config.diff.into()),
-    ]
+    ];
+    // Dynamic categories are added as crate-qualified targets. A dynamic
+    // `handlers` entry is ignored because handlers always maps to commands.
+    for (name, level) in &config.dynamic {
+        if name != "handlers" {
+            directives.push((format!("{crate_prefix}::{name}"), (*level).into()));
+        }
+    }
+    directives
 }
 
-fn build_logger(config: &LoggerConfig, output_target: env_logger::Target) -> env_logger::Logger {
+pub fn classify_module(module_path: Option<&str>, crate_prefix: &str) -> &'static str {
+    match module_path {
+        None => "frontend",
+        Some(path) => {
+            if path == crate_prefix {
+                "tauri"
+            } else if path == "frontend" {
+                "frontend"
+            } else {
+                // Check for configured top-level module prefixes
+                let rest = path
+                    .strip_prefix(crate_prefix)
+                    .and_then(|s| s.strip_prefix("::"))
+                    .unwrap_or(path);
+                let first_seg = rest.split("::").next().unwrap_or(rest);
+                match first_seg {
+                    "proxy" => "proxy",
+                    "agent" => "agent",
+                    "commands" | "handlers" => "commands",
+                    "diff" => "diff",
+                    _ => "tauri",
+                }
+            }
+        }
+    }
+}
+
+/// Classify a log record for display. Frontend IPC records are detected first
+/// via their explicit `frontend` target, because browser-originated records
+/// have no Rust module path. All other records are classified by module path.
+pub fn classify_record(
+    target: &str,
+    module_path: Option<&str>,
+    crate_prefix: &str,
+) -> &'static str {
+    if target == "frontend" {
+        "frontend"
+    } else {
+        classify_module(module_path, crate_prefix)
+    }
+}
+
+pub fn build_logger(
+    config: &LoggerConfig,
+    output_target: env_logger::Target,
+) -> env_logger::Logger {
+    let crate_prefix = env!("CARGO_CRATE_NAME");
     let mut builder = env_logger::Builder::new();
     for (target, level) in target_directives(config) {
         builder.filter_module(&target, level);
     }
     builder.target(output_target);
+    builder.format(move |buf, record| {
+        let category = classify_record(record.target(), record.module_path(), crate_prefix);
+        writeln!(
+            buf,
+            "{} [{}] [{}] {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            record.level(),
+            category,
+            record.args()
+        )
+    });
     builder.build()
 }
 
 fn highest_configured_level(config: &LoggerConfig) -> log::LevelFilter {
-    [
+    let mut levels = vec![
         config.frontend.into(),
         config.tauri.into(),
         config.proxy.into(),
         config.agent.into(),
         config.commands.into(),
         config.diff.into(),
-    ]
-    .into_iter()
-    .filter(|level| *level != log::LevelFilter::Off)
-    .max()
-    .unwrap_or(log::LevelFilter::Off)
+    ];
+    levels.extend(
+        config
+            .dynamic
+            .values()
+            .map(|l| log::LevelFilter::from(LogLevel::from(*l))),
+    );
+    levels
+        .into_iter()
+        .filter(|level| *level != log::LevelFilter::Off)
+        .max()
+        .unwrap_or(log::LevelFilter::Off)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -501,6 +580,7 @@ mod tests {
             agent: LogLevel::Info,
             commands: LogLevel::Debug,
             diff: LogLevel::Off,
+            ..Default::default()
         };
         let crate_prefix = env!("CARGO_CRATE_NAME");
         let directives = target_directives(&config);
@@ -523,6 +603,7 @@ mod tests {
             .skip(2)
             .all(|(target, _)| { target.starts_with(&format!("{crate_prefix}::")) }));
 
+        // handlers shares the commands threshold and is not independently configurable
         let command_directives: Vec<_> = directives
             .iter()
             .filter(|(target, _)| target.ends_with("::commands") || target.ends_with("::handlers"))
@@ -538,7 +619,7 @@ mod tests {
         let config = LoggerConfig {
             proxy: LogLevel::Warn,
             commands: LogLevel::Debug,
-            ..LoggerConfig::default()
+            ..Default::default()
         };
         let logger = build_logger(&config, env_logger::Target::Stdout);
         let crate_prefix = env!("CARGO_CRATE_NAME");
@@ -557,6 +638,7 @@ mod tests {
             .build();
         assert!(logger.enabled(&metadata));
 
+        // handlers honors the commands threshold
         let metadata = log::Metadata::builder()
             .level(log::Level::Debug)
             .target(&handler_target)
@@ -573,12 +655,110 @@ mod tests {
             agent: LogLevel::Trace,
             commands: LogLevel::Off,
             diff: LogLevel::Off,
+            ..Default::default()
         };
         assert_eq!(highest_configured_level(&config), log::LevelFilter::Trace);
 
         config.tauri = LogLevel::Off;
         config.agent = LogLevel::Off;
         assert_eq!(highest_configured_level(&config), log::LevelFilter::Off);
+    }
+
+    #[test]
+    fn classify_module_returns_frontend_for_none() {
+        assert_eq!(classify_module(None, "my_crate"), "frontend");
+    }
+
+    #[test]
+    fn classify_module_returns_tauri_for_crate_root() {
+        assert_eq!(classify_module(Some("my_crate"), "my_crate"), "tauri");
+    }
+
+    #[test]
+    fn classify_module_returns_proxy_for_proxy_modules() {
+        assert_eq!(
+            classify_module(Some("my_crate::proxy::http"), "my_crate"),
+            "proxy"
+        );
+        assert_eq!(
+            classify_module(Some("my_crate::proxy"), "my_crate"),
+            "proxy"
+        );
+    }
+
+    #[test]
+    fn classify_module_returns_agent_for_agent_modules() {
+        assert_eq!(
+            classify_module(Some("my_crate::agent::thinking"), "my_crate"),
+            "agent"
+        );
+    }
+
+    #[test]
+    fn classify_module_returns_commands_for_commands_and_handlers() {
+        assert_eq!(
+            classify_module(Some("my_crate::commands::main"), "my_crate"),
+            "commands"
+        );
+        assert_eq!(
+            classify_module(Some("my_crate::handlers::http"), "my_crate"),
+            "commands"
+        );
+    }
+
+    #[test]
+    fn classify_module_returns_diff_for_diff_modules() {
+        assert_eq!(
+            classify_module(Some("my_crate::diff::line"), "my_crate"),
+            "diff"
+        );
+    }
+
+    #[test]
+    fn classify_module_returns_tauri_for_unknown_modules() {
+        assert_eq!(
+            classify_module(Some("my_crate::unknown_module"), "my_crate"),
+            "tauri"
+        );
+    }
+
+    #[test]
+    fn classify_module_returns_tauri_for_other_crate_modules() {
+        assert_eq!(
+            classify_module(Some("other_crate::module"), "my_crate"),
+            "tauri"
+        );
+    }
+
+    #[test]
+    fn classify_module_returns_tauri_for_crate_root_with_extra() {
+        assert_eq!(
+            classify_module(Some("my_crate::something"), "my_crate"),
+            "tauri"
+        );
+    }
+
+    #[test]
+    fn classify_record_detects_frontend_target_first() {
+        // Frontend IPC records carry an explicit `frontend` target and no
+        // Rust module path, so they must display as `frontend`.
+        assert_eq!(
+            classify_record("frontend", Some("my_crate::handlers"), "my_crate"),
+            "frontend"
+        );
+        assert_eq!(classify_record("frontend", None, "my_crate"), "frontend");
+    }
+
+    #[test]
+    fn classify_record_falls_back_to_module_path() {
+        assert_eq!(
+            classify_record("my_crate::proxy", Some("my_crate::proxy::http"), "my_crate"),
+            "proxy"
+        );
+        assert_eq!(
+            classify_record("my_crate::handlers", Some("my_crate::handlers"), "my_crate"),
+            "commands"
+        );
     }
 
     #[test]
@@ -757,5 +937,31 @@ mod tests {
 
         assert!(copy_knowledge_files(&source, Path::new("")).is_err());
         assert!(copy_knowledge_files(&destination, &source).is_err());
+    }
+
+    #[test]
+    fn highest_configured_level_includes_dynamic_trace() {
+        let config = LoggerConfig {
+            frontend: LogLevel::Off,
+            tauri: LogLevel::Off,
+            proxy: LogLevel::Off,
+            agent: LogLevel::Off,
+            commands: LogLevel::Off,
+            diff: LogLevel::Off,
+            dynamic: {
+                let mut m = std::collections::BTreeMap::new();
+                m.insert("trace_category".to_string(), LogLevel::Trace);
+                m
+            },
+        };
+        assert_eq!(highest_configured_level(&config), log::LevelFilter::Trace);
+    }
+
+    #[test]
+    fn classify_module_handlers_alias_returns_commands() {
+        assert_eq!(
+            classify_module(Some("my_crate::handlers::http"), "my_crate"),
+            "commands"
+        );
     }
 }

@@ -564,3 +564,180 @@ knowledge:
         "child"
     );
 }
+
+#[test]
+fn logger_config_parses_dynamic_categories() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    fs::write(
+        temp_dir.path().join("config.yml"),
+        r#"
+rag:
+  provider: ""
+  model: ""
+  endpoint: ""
+chat:
+  provider: ""
+  model: ""
+  endpoint: ""
+projects:
+  path: ""
+lancedb:
+  path: ""
+logger:
+  frontend: trace
+  proxy: off
+  my_custom_category: debug
+  another_category: warn
+"#,
+    )
+    .expect("failed to write config.yml");
+
+    let state = load_config(temp_dir.path().to_path_buf())
+        .expect("failed to load config with dynamic categories");
+
+    assert_eq!(state.logger.frontend, LogLevel::Trace);
+    assert_eq!(state.logger.proxy, LogLevel::Off);
+    assert_eq!(
+        state.logger.dynamic.get("my_custom_category"),
+        Some(&LogLevel::Debug)
+    );
+    assert_eq!(
+        state.logger.dynamic.get("another_category"),
+        Some(&LogLevel::Warn)
+    );
+}
+
+#[test]
+fn logger_config_dynamic_categories_generate_correct_directives() {
+    let config = LoggerConfig {
+        frontend: LogLevel::Info,
+        tauri: LogLevel::Info,
+        proxy: LogLevel::Info,
+        agent: LogLevel::Info,
+        commands: LogLevel::Info,
+        diff: LogLevel::Info,
+        dynamic: {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert("handlers".to_string(), LogLevel::Debug);
+            m.insert("custom".to_string(), LogLevel::Trace);
+            m
+        },
+    };
+    let directives = micro_studio_agent_lib::config::target_directives(&config);
+
+    // handlers is an alias of commands: it shares the commands threshold
+    // and is not independently configurable via a dynamic entry.
+    let handlers_directive = directives
+        .iter()
+        .find(|(t, _)| t.ends_with("::handlers"))
+        .expect("handlers directive should exist");
+    assert_eq!(handlers_directive.1, log::LevelFilter::Info);
+    assert!(directives.iter().any(|(t, _)| t.ends_with("::custom")));
+}
+
+#[test]
+fn logger_config_handlers_alias_maps_to_commands() {
+    let config = LoggerConfig {
+        frontend: LogLevel::Info,
+        tauri: LogLevel::Info,
+        proxy: LogLevel::Info,
+        agent: LogLevel::Info,
+        commands: LogLevel::Debug,
+        diff: LogLevel::Info,
+        dynamic: {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert("handlers".to_string(), LogLevel::Trace);
+            m
+        },
+    };
+    let directives = micro_studio_agent_lib::config::target_directives(&config);
+
+    // handlers is not independently configurable: a dynamic `handlers` entry
+    // is ignored, and handlers always uses the commands threshold.
+    let handlers_directive = directives
+        .iter()
+        .find(|(t, _)| t.ends_with("::handlers"))
+        .expect("handlers directive should exist");
+    assert_eq!(handlers_directive.1, log::LevelFilter::Debug);
+    let commands_directive = directives
+        .iter()
+        .find(|(t, _)| t.ends_with("::commands"))
+        .expect("commands directive should exist");
+    assert_eq!(commands_directive.1, log::LevelFilter::Debug);
+}
+
+#[test]
+fn logger_config_classify_module_fallbacks_to_tauri() {
+    assert_eq!(
+        micro_studio_agent_lib::config::classify_module(
+            Some("some_other_crate::module"),
+            "micro_studio_agent_lib"
+        ),
+        "tauri"
+    );
+}
+
+#[test]
+fn logger_config_classify_module_frontend() {
+    assert_eq!(
+        micro_studio_agent_lib::config::classify_module(Some("frontend"), "micro_studio_agent_lib"),
+        "frontend"
+    );
+}
+
+#[test]
+fn logger_config_filtering_with_dynamic_trace_category() {
+    let config = LoggerConfig {
+        frontend: LogLevel::Info,
+        tauri: LogLevel::Info,
+        proxy: LogLevel::Info,
+        agent: LogLevel::Info,
+        commands: LogLevel::Info,
+        diff: LogLevel::Info,
+        dynamic: {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert("trace_category".to_string(), LogLevel::Trace);
+            m
+        },
+    };
+    let logger = micro_studio_agent_lib::config::build_logger(&config, env_logger::Target::Stdout);
+
+    // The library crate name is used for internal directives, not the test crate name.
+    let trace_target = "micro_studio_agent_lib::trace_category";
+    let metadata = log::Metadata::builder()
+        .level(log::Level::Trace)
+        .target(trace_target)
+        .build();
+    assert!(log::Log::enabled(&logger, &metadata));
+
+    let metadata = log::Metadata::builder()
+        .level(log::Level::Debug)
+        .target(trace_target)
+        .build();
+    assert!(log::Log::enabled(&logger, &metadata));
+}
+
+#[test]
+fn logger_config_filtering_with_dynamic_trace_category_via_module_path() {
+    let config = LoggerConfig {
+        frontend: LogLevel::Off,
+        tauri: LogLevel::Off,
+        proxy: LogLevel::Off,
+        agent: LogLevel::Off,
+        commands: LogLevel::Off,
+        diff: LogLevel::Off,
+        dynamic: {
+            let mut m = std::collections::BTreeMap::new();
+            m.insert("trace_category".to_string(), LogLevel::Trace);
+            m
+        },
+    };
+    let logger = micro_studio_agent_lib::config::build_logger(&config, env_logger::Target::Stdout);
+
+    // Records from a child module of the dynamic category should match
+    let metadata = log::Metadata::builder()
+        .level(log::Level::Debug)
+        .target("micro_studio_agent_lib::trace_category::inner")
+        .build();
+    assert!(log::Log::enabled(&logger, &metadata));
+}

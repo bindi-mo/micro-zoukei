@@ -17,3 +17,6 @@ logger:
   agent: info
   commands: info
   diff: info
+  # Additional categories use the short top-level module name, e.g.:
+  # network: debug
+  # initial_index: warn
