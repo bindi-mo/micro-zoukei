@@ -1,4 +1,4 @@
-# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.2.9
+# microStudio AI Agent Extension System — Architecture Design & Implementation Specification v1.3.0
 
 ## 1. System Overview
 
@@ -167,6 +167,33 @@ started with an incomplete knowledge base. Tauri packages the recursive
   - Project monitoring: detects file changes via `notify`, automatically re-indexes
   - **Per-provider API endpoint configuration**: Endpoints for each provider are explicitly written in `config.yml`
 
+#### Index Identity Persistence
+
+Each index record in LanceDB is accompanied by persistent metadata storing the `embedding_provider` and `embedding_model` that were used to generate the embeddings. This identity is stored alongside the index (e.g., as a dedicated table or metadata columns in `my_documents`) and is the basis for all validation and rebuild decisions.
+
+#### Index Validation on Load
+
+When the application starts or a project is loaded, the stored `embedding_provider` and `embedding_model` values are compared against the current `rag.provider` and `rag.model` settings from `config.yml`. This identity check determines whether the existing index is still valid.
+
+#### Staleness Detection Conditions
+
+An index is considered **stale** (and requires rebuild) if any of the following conditions are detected:
+
+- **Column deficiency**: The stored index lacks the `embedding_provider` or `embedding_model` metadata columns (e.g., from an older version that did not persist identity)
+- **Dimension mismatch**: The vector dimensions stored in the index do not match the output dimension of the current embedding model
+- **Provider/model mismatch**: The stored `embedding_provider` or `embedding_model` differs from the current `rag.provider` or `rag.model` in `config.yml`
+
+#### Automatic Rebuild on Staleness
+
+When staleness is detected, the index is automatically rebuilt:
+- All existing entries in the LanceDB index for that project are cleared
+- The document loading → chunking → embedding → storage flow is re-executed using the current embedding configuration
+- The new identity metadata (`embedding_provider`, `embedding_model`) is persisted with the rebuilt index
+
+#### Configuration Independence
+
+RAG index rebuilds are triggered **only** by changes to `rag.provider` or `rag.model`. Changes to `chat.provider` or `chat.model` do **not** trigger index rebuilds, as the chat configuration affects only LLM inference and has no impact on embedding generation or index structure.
+
 ### LAYER 4: LLM Provider
 
 - **Requirements**: **Only supported if the model supports Tool Calling (Tool Definition / Tool Choice)** (e.g., `gpt-4o`, `claude-3.5-sonnet`, `llama3.1`, `qwen2.5-coder`)
@@ -316,6 +343,7 @@ The `api_key_env` field can be omitted when not required by the LLM provider
 | v1.2.7 | 2026-09-17 | Added per-module log-level configuration, lazy severity filtering, frontend log IPC classification, stream routing, and logger regression tests |
 | v1.2.8 | 2026-09-17 | Reworked logging to infer Rust modules from `module_path!()`, added frontend-specific logging, and moved diff failure logging into `diff.rs` |
 | v1.2.9 | 2026-09-18 | Replaced the custom logger with `log`/`env_logger`, retained typed module filters, and routed only errors to stderr |
+| v1.3.0 | 2026-09-19 | Added index identity persistence (`embedding_provider`/`embedding_model`), index validation on load, staleness detection (column deficiency, dimension mismatch, provider/model mismatch), automatic rebuild on staleness, and documented RAG index rebuild trigger scope (rag.provider/rag.model only, not chat settings) |
 
 ---
 
@@ -346,6 +374,18 @@ Rust call sites use the standard `log::trace!`, `log::debug!`, `log::info!`,
 `log::warn!`, and `log::error!` macros. Frontend IPC records use an explicit
 `target: "frontend"`. Diff persistence failures remain emitted from `diff.rs`,
 so they use the `diff` target rather than the wrapping command handler's target.
+
+---
+
+### Summary of Changes (v1.2.9 → v1.3.0)
+
+| Item | Change Description |
+|---|---|
+| **Index Identity** | Added persistent `embedding_provider` and `embedding_model` metadata to index records |
+| **Index Validation** | Added identity check on load comparing stored values against `rag.provider`/`rag.model` |
+| **Staleness Detection** | Defined 3 staleness conditions: column deficiency, dimension mismatch, provider/model mismatch |
+| **Auto-Rebuild** | Automatic index rebuild on staleness (clear → re-index → persist new identity) |
+| **Config Independence** | Documented that index rebuilds are triggered only by `rag.provider`/`rag.model` changes, not `chat` settings |
 
 ---
 

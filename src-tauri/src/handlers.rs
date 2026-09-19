@@ -266,11 +266,60 @@ pub async fn handle_ensure_initial_index(
 
     match current_status {
         crate::initial_index::InitialIndexStatus::Complete => {
-            return Ok(EnsureInitialIndexResponse {
-                status: "already_valid".to_string(),
-                valid: true,
-                document_count,
-            });
+            // A completed index is only valid against the current embedding identity.
+            let provider = config_state.rag.provider.clone();
+            let model = config_state.rag.model.clone();
+            let db_path = config_state.lancedb.path.clone();
+            let expected_dims = match crate::agent::rag::resolve_embedding_dimensions(
+                &provider,
+                &model,
+                &crate::agent::rag::create_llm_client(&provider).map_err(|e| e.to_string())?,
+            )
+            .await
+            {
+                Ok(dims) => dims,
+                Err(_) => {
+                    initial_index_manager.reset();
+                    return Ok(EnsureInitialIndexResponse {
+                        status: "started".to_string(),
+                        valid: false,
+                        document_count,
+                    });
+                }
+            };
+            let validation = match crate::agent::rag::validate_my_documents_table(
+                &db_path,
+                expected_dims,
+                &provider,
+                &model,
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    initial_index_manager.reset();
+                    return Ok(EnsureInitialIndexResponse {
+                        status: "started".to_string(),
+                        valid: false,
+                        document_count,
+                    });
+                }
+            };
+            if validation.valid {
+                return Ok(EnsureInitialIndexResponse {
+                    status: "already_valid".to_string(),
+                    valid: true,
+                    document_count,
+                });
+            }
+            initial_index_manager.reset();
+            if !initial_index_manager.try_start_indexing() {
+                return Ok(EnsureInitialIndexResponse {
+                    status: "in_progress".to_string(),
+                    valid: false,
+                    document_count,
+                });
+            }
         }
         crate::initial_index::InitialIndexStatus::InProgress => {
             return Ok(EnsureInitialIndexResponse {

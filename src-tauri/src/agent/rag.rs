@@ -1,6 +1,10 @@
-use arrow_array::{types::Float64Type, ArrayRef, FixedSizeListArray, RecordBatch, StringArray};
+use arrow_array::{
+    types::Float64Type, Array, ArrayRef, FixedSizeListArray, RecordBatch, StringArray,
+};
 use arrow_schema::DataType;
+use futures_util::TryStreamExt;
 use lancedb;
+use lancedb::query::{ExecutableQuery, QueryBase, Select};
 #[cfg(debug_assertions)]
 use notify::{recommended_watcher, Config, RecursiveMode, Watcher};
 use rig::client::{CompletionClient, EmbeddingsClient, ProviderClient};
@@ -69,6 +73,10 @@ pub enum RagIndexError {
         expected: usize,
         actual: usize,
     },
+    EmbeddingIdentityMismatch {
+        provider: String,
+        model: String,
+    },
     EmbeddingProbe(rig::embeddings::EmbeddingError),
     Arrow(lancedb::arrow::arrow_schema::ArrowError),
 }
@@ -114,6 +122,11 @@ impl std::fmt::Display for RagIndexError {
                 model,
                 expected,
                 actual
+            ),
+            Self::EmbeddingIdentityMismatch { provider, model } => write!(
+                formatter,
+                "Embedding identity mismatch for provider '{}' and model '{}'",
+                provider, model
             ),
             Self::EmbeddingProbe(error) => write!(formatter, "Embedding probe failed: {}", error),
             Self::Arrow(error) => write!(formatter, "Arrow error: {}", error),
@@ -172,7 +185,7 @@ fn embedding_dimensions_from_vector(
     validate_embedding_dimensions(provider, model_name, dims)
 }
 
-async fn resolve_embedding_dimensions<H>(
+pub async fn resolve_embedding_dimensions<H>(
     provider: &str,
     model_name: &str,
     client: &SupportedClient<H>,
@@ -230,6 +243,8 @@ pub struct DocumentRecord {
     pub id: String,
     pub text: String,
     pub relative_path: String,
+    pub embedding_provider: String,
+    pub embedding_model: String,
 }
 
 impl rig::Embed for DocumentRecord {
@@ -281,6 +296,8 @@ fn as_record_batch(
     let mut ids: Vec<String> = Vec::new();
     let mut relative_paths: Vec<String> = Vec::new();
     let mut texts: Vec<String> = Vec::new();
+    let mut embedding_providers: Vec<String> = Vec::new();
+    let mut embedding_models: Vec<String> = Vec::new();
     let mut embedding_vecs: Vec<Option<Vec<Option<f64>>>> = Vec::new();
 
     for (record, embeddings) in records {
@@ -298,6 +315,8 @@ fn as_record_batch(
             ids.push(record.id.clone());
             relative_paths.push(record.relative_path.clone());
             texts.push(record.text.clone());
+            embedding_providers.push(record.embedding_provider.clone());
+            embedding_models.push(record.embedding_model.clone());
             embedding_vecs.push(Some(
                 embedding.vec.into_iter().map(Some).collect::<Vec<_>>(),
             ));
@@ -307,6 +326,8 @@ fn as_record_batch(
     let id = StringArray::from_iter_values(ids);
     let relative_path = StringArray::from_iter_values(relative_paths);
     let text = StringArray::from_iter_values(texts);
+    let embedding_providers = StringArray::from_iter_values(embedding_providers);
+    let embedding_models = StringArray::from_iter_values(embedding_models);
     let embedding =
         FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(embedding_vecs, dims as i32);
 
@@ -315,6 +336,11 @@ fn as_record_batch(
         ("relative_path", Arc::new(relative_path) as ArrayRef),
         ("text", Arc::new(text) as ArrayRef),
         ("embedding", Arc::new(embedding) as ArrayRef),
+        (
+            "embedding_provider",
+            Arc::new(embedding_providers) as ArrayRef,
+        ),
+        ("embedding_model", Arc::new(embedding_models) as ArrayRef),
     ])?)
 }
 
@@ -353,6 +379,8 @@ pub async fn rag_inject_documents(
                 id: format!("doc_{}", id_counter),
                 text: content,
                 relative_path,
+                embedding_provider: provider.to_string(),
+                embedding_model: embedding_model_name.to_string(),
             });
         }
     }
@@ -535,6 +563,8 @@ pub struct TableValidationResult {
 pub async fn validate_my_documents_table(
     db_uri: &str,
     expected_dims: usize,
+    expected_provider: &str,
+    expected_model: &str,
 ) -> Result<TableValidationResult, Box<dyn std::error::Error>> {
     let db = lancedb::connect(db_uri).execute().await?;
 
@@ -554,8 +584,15 @@ pub async fn validate_my_documents_table(
     let schema = table.schema().await?;
     let fields = schema.fields();
 
-    // Required fields
-    let required_fields = ["id", "relative_path", "text", "embedding"];
+    // Required fields, including the embedding identity used to detect stale indexes.
+    let required_fields = [
+        "id",
+        "relative_path",
+        "text",
+        "embedding",
+        "embedding_provider",
+        "embedding_model",
+    ];
     for field_name in required_fields {
         if !fields
             .iter()
@@ -572,7 +609,7 @@ pub async fn validate_my_documents_table(
     // Validate field types
     for field in fields {
         match field.name().as_str() {
-            "id" | "relative_path" | "text" => {
+            "id" | "relative_path" | "text" | "embedding_provider" | "embedding_model" => {
                 if !matches!(field.data_type(), DataType::Utf8) {
                     return Ok(TableValidationResult {
                         valid: false,
@@ -624,7 +661,7 @@ pub async fn validate_my_documents_table(
         }
     }
 
-    // Check row count
+    // Check row count and embedding identity. Missing identity columns are treated as stale.
     let count = table.count_rows(None).await? as usize;
     if count == 0 {
         return Ok(TableValidationResult {
@@ -632,6 +669,57 @@ pub async fn validate_my_documents_table(
             document_count: 0,
             error: Some("Table 'my_documents' has zero rows".to_string()),
         });
+    }
+
+    let batches = table
+        .query()
+        .select(Select::Columns(vec![
+            "embedding_provider".to_string(),
+            "embedding_model".to_string(),
+        ]))
+        .execute()
+        .await?
+        .try_collect::<Vec<RecordBatch>>()
+        .await?;
+
+    let expected_provider = expected_provider.trim().to_ascii_lowercase();
+    let expected_model = expected_model;
+
+    for batch in &batches {
+        let provider_array = batch
+            .column_by_name("embedding_provider")
+            .ok_or_else(|| "Missing embedding_provider column".to_string())?
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| "embedding_provider must be a string column".to_string())?;
+        let model_array = batch
+            .column_by_name("embedding_model")
+            .ok_or_else(|| "Missing embedding_model column".to_string())?
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| "embedding_model must be a string column".to_string())?;
+
+        for row in 0..batch.num_rows() {
+            if provider_array.is_null(row)
+                || model_array.is_null(row)
+                || provider_array.value(row).trim().is_empty()
+                || model_array.value(row).trim().is_empty()
+                || provider_array.value(row).trim().to_ascii_lowercase() != expected_provider
+                || model_array.value(row) != expected_model
+            {
+                return Ok(TableValidationResult {
+                    valid: false,
+                    document_count: count,
+                    error: Some(format!(
+                        "Embedding identity mismatch: expected provider '{}', model '{}', found provider '{}' model '{}'",
+                        expected_provider,
+                        expected_model,
+                        provider_array.value(row).trim(),
+                        model_array.value(row).trim()
+                    )),
+                });
+            }
+        }
     }
 
     Ok(TableValidationResult {
@@ -660,6 +748,8 @@ pub fn discover_source_files(target_dir: &str) -> Result<Vec<PathBuf>, Box<dyn s
 pub fn create_document_records(
     root_dir: &Path,
     files: Vec<PathBuf>,
+    embedding_provider: &str,
+    embedding_model: &str,
 ) -> Result<Vec<DocumentRecord>, Box<dyn std::error::Error>> {
     let mut documents = Vec::new();
 
@@ -671,6 +761,8 @@ pub fn create_document_records(
             id: format!("doc_{}", id_counter),
             text: content,
             relative_path,
+            embedding_provider: embedding_provider.to_string(),
+            embedding_model: embedding_model.to_string(),
         });
     }
 
@@ -713,7 +805,8 @@ pub async fn ensure_initial_index(
         resolve_embedding_dimensions(provider, embedding_model_name, &client_enum).await?;
 
     // First, validate existing table
-    let validation = validate_my_documents_table(db_uri, expected_dims).await?;
+    let validation =
+        validate_my_documents_table(db_uri, expected_dims, provider, embedding_model_name).await?;
     if validation.valid {
         return Ok(validation);
     }
@@ -731,9 +824,9 @@ pub async fn ensure_initial_index(
         });
     }
 
-    // Create document records
     let root_dir = Path::new(target_dir);
-    let documents = create_document_records(root_dir, source_files)?;
+    let documents =
+        create_document_records(root_dir, source_files, provider, embedding_model_name)?;
 
     // Generate embeddings
     let embeddings = match client_enum {
@@ -768,14 +861,17 @@ pub async fn ensure_initial_index(
     write_my_documents_table(db_uri, record_batch).await?;
 
     // Revalidate
-    validate_my_documents_table(db_uri, expected_dims).await
+    validate_my_documents_table(db_uri, expected_dims, provider, embedding_model_name).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::types::Int64Type;
-    use arrow_array::{ArrayRef, FixedSizeListArray, Int64Array, RecordBatch, StringArray};
+    use arrow_array::{
+        types::{Float64Type, Int64Type},
+        ArrayRef, FixedSizeListArray, Int64Array, RecordBatch, StringArray,
+    };
+    use arrow_schema::DataType;
     use rig::test_utils::{MockHttpResponse, SequencedHttpClient};
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -886,6 +982,8 @@ mod tests {
                 id: "doc-1".to_string(),
                 relative_path: "one.md".to_string(),
                 text: "content".to_string(),
+                embedding_provider: "ollama".to_string(),
+                embedding_model: "nomic-embed-text:latest".to_string(),
             },
             vec![Embedding {
                 document: "content".to_string(),
@@ -917,6 +1015,8 @@ mod tests {
                     id: "doc-1".to_string(),
                     relative_path: "one.md".to_string(),
                     text: "first".to_string(),
+                    embedding_provider: "ollama".to_string(),
+                    embedding_model: "nomic-embed-text".to_string(),
                 },
                 vec![Embedding {
                     document: "first".to_string(),
@@ -928,6 +1028,8 @@ mod tests {
                     id: "doc-2".to_string(),
                     relative_path: "two.md".to_string(),
                     text: "second".to_string(),
+                    embedding_provider: "ollama".to_string(),
+                    embedding_model: "nomic-embed-text".to_string(),
                 },
                 vec![Embedding {
                     document: "second".to_string(),
@@ -939,7 +1041,7 @@ mod tests {
         let batch = build_record_batch("ollama", "nomic-embed-text", records, 2).unwrap();
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 4);
+        assert_eq!(batch.num_columns(), 6);
         let schema = batch.schema();
         let DataType::FixedSizeList(field, width) =
             schema.field_with_name("embedding").unwrap().data_type()
@@ -948,6 +1050,20 @@ mod tests {
         };
         assert_eq!(*width, 2);
         assert_eq!(field.data_type(), &DataType::Float64);
+        assert_eq!(
+            schema
+                .field_with_name("embedding_provider")
+                .unwrap()
+                .data_type(),
+            &DataType::Utf8
+        );
+        assert_eq!(
+            schema
+                .field_with_name("embedding_model")
+                .unwrap()
+                .data_type(),
+            &DataType::Utf8
+        );
     }
 
     #[test]
@@ -1053,6 +1169,14 @@ mod tests {
             ),
             ("embedding", Arc::new(embedding) as ArrayRef),
             (
+                "embedding_provider",
+                Arc::new(StringArray::from(vec!["ollama"])) as ArrayRef,
+            ),
+            (
+                "embedding_model",
+                Arc::new(StringArray::from(vec!["nomic-embed-text"])) as ArrayRef,
+            ),
+            (
                 "extra",
                 Arc::new(StringArray::from(vec!["allowed"])) as ArrayRef,
             ),
@@ -1060,7 +1184,9 @@ mod tests {
         .unwrap();
         write_validation_table(&db_uri, batch).await;
 
-        let result = validate_my_documents_table(&db_uri, 2).await.unwrap();
+        let result = validate_my_documents_table(&db_uri, 2, "ollama", "nomic-embed-text")
+            .await
+            .unwrap();
         assert!(result.valid);
         assert_eq!(result.document_count, 1);
         assert!(result.error.is_none());
@@ -1085,7 +1211,9 @@ mod tests {
         .unwrap();
         write_validation_table(&db_uri, batch).await;
 
-        let result = validate_my_documents_table(&db_uri, 1).await.unwrap();
+        let result = validate_my_documents_table(&db_uri, 1, "ollama", "nomic-embed-text")
+            .await
+            .unwrap();
         assert!(!result.valid);
         assert_eq!(
             result.error.as_deref(),
@@ -1112,11 +1240,21 @@ mod tests {
                 Arc::new(StringArray::from(vec!["content"])) as ArrayRef,
             ),
             ("embedding", Arc::new(embedding) as ArrayRef),
+            (
+                "embedding_provider",
+                Arc::new(StringArray::from(vec!["ollama"])) as ArrayRef,
+            ),
+            (
+                "embedding_model",
+                Arc::new(StringArray::from(vec!["nomic-embed-text"])) as ArrayRef,
+            ),
         ])
         .unwrap();
         write_validation_table(&db_uri, batch).await;
 
-        let result = validate_my_documents_table(&db_uri, 1).await.unwrap();
+        let result = validate_my_documents_table(&db_uri, 1, "ollama", "nomic-embed-text")
+            .await
+            .unwrap();
         assert!(!result.valid);
         assert!(result
             .error
@@ -1144,11 +1282,21 @@ mod tests {
                 Arc::new(StringArray::from(vec!["content"])) as ArrayRef,
             ),
             ("embedding", Arc::new(embedding) as ArrayRef),
+            (
+                "embedding_provider",
+                Arc::new(StringArray::from(vec!["ollama"])) as ArrayRef,
+            ),
+            (
+                "embedding_model",
+                Arc::new(StringArray::from(vec!["nomic-embed-text"])) as ArrayRef,
+            ),
         ])
         .unwrap();
         write_validation_table(&db_uri, batch).await;
 
-        let result = validate_my_documents_table(&db_uri, 1).await.unwrap();
+        let result = validate_my_documents_table(&db_uri, 1, "ollama", "nomic-embed-text")
+            .await
+            .unwrap();
         assert!(!result.valid);
         assert!(result
             .error
@@ -1176,11 +1324,21 @@ mod tests {
                 Arc::new(StringArray::from(vec!["content"])) as ArrayRef,
             ),
             ("embedding", Arc::new(embedding) as ArrayRef),
+            (
+                "embedding_provider",
+                Arc::new(StringArray::from(vec!["ollama"])) as ArrayRef,
+            ),
+            (
+                "embedding_model",
+                Arc::new(StringArray::from(vec!["nomic-embed-text"])) as ArrayRef,
+            ),
         ])
         .unwrap();
         write_validation_table(&db_uri, batch).await;
 
-        let result = validate_my_documents_table(&db_uri, 1).await.unwrap();
+        let result = validate_my_documents_table(&db_uri, 1, "ollama", "nomic-embed-text")
+            .await
+            .unwrap();
         assert!(!result.valid);
         assert!(result
             .error
@@ -1211,11 +1369,21 @@ mod tests {
                 Arc::new(StringArray::from(Vec::<String>::new())) as ArrayRef,
             ),
             ("embedding", Arc::new(embedding) as ArrayRef),
+            (
+                "embedding_provider",
+                Arc::new(StringArray::from(Vec::<String>::new())) as ArrayRef,
+            ),
+            (
+                "embedding_model",
+                Arc::new(StringArray::from(Vec::<String>::new())) as ArrayRef,
+            ),
         ])
         .unwrap();
         write_validation_table(&db_uri, batch).await;
 
-        let result = validate_my_documents_table(&db_uri, 2).await.unwrap();
+        let result = validate_my_documents_table(&db_uri, 2, "ollama", "nomic-embed-text")
+            .await
+            .unwrap();
         assert!(!result.valid);
         assert_eq!(
             result.error.as_deref(),

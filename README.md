@@ -95,6 +95,8 @@ Embedding dimensions are resolved from the configured embedding model before Lan
 
 The frontend applies a separate three-second timeout to the immediate `mzd_ensure_initial_index` response. A timely `already_valid`, `started`, or `in_progress` response cancels the timeout; later lifecycle events still control the visible indexing state. If no immediate response arrives, the frontend reports a clear error, closes the modal, and leaves its request state as `failed` without cancelling an indexing task that the backend has already started. The existing five-second timeout in `rpc-bridge.ts` remains a separate transport safeguard.
 
+The `my_documents` table persists `embedding_provider` and `embedding_model` for every document row. The initial index validates the existing table against the current embedding identity before reuse. A completed index is revalidated on the next `mzd_ensure_initial_index` call; if the embedding provider or model has changed, the index is treated as invalid and rebuilt through the normal `started` lifecycle. Changing only the chat/completion model does not invalidate the RAG index because RAG uses the independent `rag.provider` and `rag.model` configuration. Legacy tables without identity columns are treated as stale and rebuilt automatically.
+
 ## Getting Started
 
 To build and run the project:
