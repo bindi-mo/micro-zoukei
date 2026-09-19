@@ -120,6 +120,7 @@ pub async fn handle_delete_file(path: String) -> Result<bool, String> {
 pub async fn handle_log_message(level: String, message: String) -> Result<(), String> {
     println!("{}", message);
     match level.as_str() {
+        "debug" => log::debug!(target: "frontend", "{}", message),
         "info" => log::info!(target: "frontend", "{}", message),
         "warn" => log::warn!(target: "frontend", "{}", message),
         "error" => log::error!(target: "frontend", "{}", message),
