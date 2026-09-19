@@ -373,7 +373,7 @@ so they use the `diff` target rather than the wrapping command handler's target.
 | v1.2.7 | 2026-09-17 | Added per-module log-level configuration, lazy severity filtering, frontend log IPC classification, stream routing, and logger regression tests |
 | v1.2.8 | 2026-09-17 | Reworked logging to infer Rust modules from `module_path!()`, added frontend-specific logging, and moved diff failure logging into `diff.rs` |
 | v1.2.9 | 2026-09-18 | Replaced the custom logger with `log`/`env_logger`, retained typed module filters, and routed only errors to stderr |
-| v1.3.0 | 2026-09-19 | Added index identity persistence (`embedding_provider`/`embedding_model`), index validation on load, staleness detection (column deficiency, dimension mismatch, provider/model mismatch), automatic rebuild on staleness, and documented RAG index rebuild trigger scope (rag.provider/rag.model only, not chat settings) |
+| v1.3.0 | 2026-09-19 | Index identity persistence, load-time validation, staleness detection, auto-rebuild, rebuild trigger scope docs |
 
 ---
 
