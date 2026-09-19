@@ -325,28 +325,6 @@ The `api_key_env` field can be omitted when not required by the LLM provider
 
 ---
 
-## 8. Version History
-
-| Version | Date | Changes |
-|---|---|---|
-| v1.0.0 | 2026-09-12 | Initial design (Tauri + Python sidecar + ChromaDB) |
-| v1.0.1 | 2026-09-12 | Changed Monaco Editor → unified diff + diff2html; renamed shadow workspace → workspace |
-| v1.1.0 | 2026-09-12 | Removed Python sidecar, unified to Rust-only, adopted LanceDB |
-| v1.1.1 | 2026-09-12 | Removed TLS description, corrected Python 3.11+ notation, introduced rig-core |
-| v1.2.0 | 2026-09-13 | Workspace physical location specification, sqlite3 diff recording, forced sync workflow, streaming support, config.yml specification, terminology unification |
-| v1.2.1 | 2026-09-13 | Reviewed rig-core design/specifications overall, added Function Executor details |
-| v1.2.2 | 2026-09-13 | Changed streaming data transfer method to `app_handle.emit()` and Tauri Event, corrected Layer 1–4, other minor fixes |
-| v1.2.3 | 2026-09-13 | Specified crate for diff recording (rusqlite), added detailed Diff Management functionality description |
-| v1.2.4 | 2026-09-13 | Specified IPC communication method (fetch via reverse proxy), added `notify`, removed LanceDB memory usage descriptions, clarified Function Calling support conditions, added per-project workspace subdirectories, added per-provider API endpoint configuration in config.yml, unified notation (sqlite3 → SQLite), specified streaming performance considerations |
-| v1.2.5 | 2026-09-13 | Implemented all discrepancies between specification and Rust/Tauri implementation: `rig-core` → `rig` notation, `serde_yaml` → `noyalib`, `api_key` → `api_key_env`, real rusqlite diff recording, RAG integration in executor, per-provider endpoint support, project file monitoring with `notify`, diff recording in handlers |
-| v1.2.6 | 2026-09-17 | Added startup synchronization of packaged knowledge resources, recursive resource packaging, configurable knowledge paths, workspace-scoped configuration defaults, and bidirectional path-overlap protection |
-| v1.2.7 | 2026-09-17 | Added per-module log-level configuration, lazy severity filtering, frontend log IPC classification, stream routing, and logger regression tests |
-| v1.2.8 | 2026-09-17 | Reworked logging to infer Rust modules from `module_path!()`, added frontend-specific logging, and moved diff failure logging into `diff.rs` |
-| v1.2.9 | 2026-09-18 | Replaced the custom logger with `log`/`env_logger`, retained typed module filters, and routed only errors to stderr |
-| v1.3.0 | 2026-09-19 | Added index identity persistence (`embedding_provider`/`embedding_model`), index validation on load, staleness detection (column deficiency, dimension mismatch, provider/model mismatch), automatic rebuild on staleness, and documented RAG index rebuild trigger scope (rag.provider/rag.model only, not chat settings) |
-
----
-
 ### Logger Design
 
 The logger is initialized after `AppState` commits the loaded `ConfigState`,
@@ -374,6 +352,28 @@ Rust call sites use the standard `log::trace!`, `log::debug!`, `log::info!`,
 `log::warn!`, and `log::error!` macros. Frontend IPC records use an explicit
 `target: "frontend"`. Diff persistence failures remain emitted from `diff.rs`,
 so they use the `diff` target rather than the wrapping command handler's target.
+
+---
+
+## 8. Version History
+
+| Version | Date | Changes |
+|---|---|---|
+| v1.0.0 | 2026-09-12 | Initial design (Tauri + Python sidecar + ChromaDB) |
+| v1.0.1 | 2026-09-12 | Changed Monaco Editor → unified diff + diff2html; renamed shadow workspace → workspace |
+| v1.1.0 | 2026-09-12 | Removed Python sidecar, unified to Rust-only, adopted LanceDB |
+| v1.1.1 | 2026-09-12 | Removed TLS description, corrected Python 3.11+ notation, introduced rig-core |
+| v1.2.0 | 2026-09-13 | Workspace physical location specification, sqlite3 diff recording, forced sync workflow, streaming support, config.yml specification, terminology unification |
+| v1.2.1 | 2026-09-13 | Reviewed rig-core design/specifications overall, added Function Executor details |
+| v1.2.2 | 2026-09-13 | Changed streaming data transfer method to `app_handle.emit()` and Tauri Event, corrected Layer 1–4, other minor fixes |
+| v1.2.3 | 2026-09-13 | Specified crate for diff recording (rusqlite), added detailed Diff Management functionality description |
+| v1.2.4 | 2026-09-13 | Specified IPC communication method (fetch via reverse proxy), added `notify`, removed LanceDB memory usage descriptions, clarified Function Calling support conditions, added per-project workspace subdirectories, added per-provider API endpoint configuration in config.yml, unified notation (sqlite3 → SQLite), specified streaming performance considerations |
+| v1.2.5 | 2026-09-13 | Implemented all discrepancies between specification and Rust/Tauri implementation: `rig-core` → `rig` notation, `serde_yaml` → `noyalib`, `api_key` → `api_key_env`, real rusqlite diff recording, RAG integration in executor, per-provider endpoint support, project file monitoring with `notify`, diff recording in handlers |
+| v1.2.6 | 2026-09-17 | Added startup synchronization of packaged knowledge resources, recursive resource packaging, configurable knowledge paths, workspace-scoped configuration defaults, and bidirectional path-overlap protection |
+| v1.2.7 | 2026-09-17 | Added per-module log-level configuration, lazy severity filtering, frontend log IPC classification, stream routing, and logger regression tests |
+| v1.2.8 | 2026-09-17 | Reworked logging to infer Rust modules from `module_path!()`, added frontend-specific logging, and moved diff failure logging into `diff.rs` |
+| v1.2.9 | 2026-09-18 | Replaced the custom logger with `log`/`env_logger`, retained typed module filters, and routed only errors to stderr |
+| v1.3.0 | 2026-09-19 | Added index identity persistence (`embedding_provider`/`embedding_model`), index validation on load, staleness detection (column deficiency, dimension mismatch, provider/model mismatch), automatic rebuild on staleness, and documented RAG index rebuild trigger scope (rag.provider/rag.model only, not chat settings) |
 
 ---
 
