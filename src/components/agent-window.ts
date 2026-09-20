@@ -2,6 +2,8 @@
 // type definition (Types)
 // ============================================================================
 
+type Cleanup = () => void;
+
 export interface ChatMessage {
     sender: 'user' | 'agent';
     text: string;
@@ -116,30 +118,27 @@ export const handleSendMessage = (): void => {
 /**
  * Generates the chat window and initializes it within the #code-section element
  */
-export const setupAgentChatWindow = (): void => {
+export const setupAgentChatWindow = (): Cleanup => {
     const codeSection = document.getElementById('code-section');
     if (!codeSection) {
         console.error('The chat screen could not be initialized because #code-section could not be found.');
-        return;
+        return () => undefined;
     }
 
     // If it already exists, do nothing (prevent duplicate creation).
-    if (document.getElementById('agent-chat-window')) return;
+    if (document.getElementById('agent-chat-window')) return () => undefined;
 
     // Generate the base for the chat window.
     const chatWindow = document.createElement('div');
     chatWindow.id = 'agent-chat-window';
     chatWindow.style.position = 'absolute';
-    chatWindow.style.display = 'none'; // Initially, it is hidden (controlled by setSection).
+    chatWindow.style.display = 'none';
     chatWindow.style.width = '571px';
     chatWindow.style.height = '100%';
     chatWindow.style.backgroundColor = '#1e1e1e';
 
-    // Calculate and update chatWindow width
     const updateWidth = (): void => {
         const sidemenuBar = document.getElementById('sidemenu');
-        let width = 0;
-        // see visible_sidemenu()
         const sidemenuWidth = (sidemenuBar && sidemenuBar.style.left !== '-60px')
             ? sidemenuBar.clientWidth
             : 0;
@@ -150,33 +149,37 @@ export const setupAgentChatWindow = (): void => {
         const offsetWidth = sidemenuWidth + runtimeWidth + splitbarWidth;
 
         if (offsetWidth > 0) {
-            const mainWidth = window.innerWidth - offsetWidth;
-            chatWindow.style.width = `${mainWidth}px`;
+            chatWindow.style.width = `${window.innerWidth - offsetWidth}px`;
         }
     };
 
-    // Recalculate width on window resize
-    window.addEventListener('resize', updateWidth);
+    const handleSendClick = (): void => handleSendMessage();
+    const handleInputKeydown = (event: Event): void => {
+        const keyEvent = event as KeyboardEvent;
+        if (keyEvent.key === 'Enter' && !keyEvent.isComposing) {
+            event.preventDefault();
+            handleSendMessage();
+        }
+    };
 
-    // Inject the markup and add it to the DOM.
+    window.addEventListener('resize', updateWidth);
     chatWindow.innerHTML = createChatMarkup();
     codeSection.appendChild(chatWindow);
 
-    // Event linking for the submit button
     const sendBtn = chatWindow.querySelector('#chat-send-button');
-    sendBtn?.addEventListener('click', handleSendMessage);
+    sendBtn?.addEventListener('click', handleSendClick);
 
-    // Linking the Enter key event to an input field
     const inputEl = chatWindow.querySelector('#chat-user-input');
-    inputEl?.addEventListener('keydown', (e: Event) => {
-        const keyEvent = e as KeyboardEvent;
-        // Confirm that you pressed Enter, and not the Enter key used to
-        // confirm conversion in Japanese input.
-        if (keyEvent.key === 'Enter' && !keyEvent.isComposing) {
-            e.preventDefault(); // Prevent default behavior such as line breaks.
-            handleSendMessage();
-        }
-    });
+    inputEl?.addEventListener('keydown', handleInputKeydown);
 
     console.log('The UI for the Agent chat window is now ready.');
+
+    return () => {
+        window.removeEventListener('resize', updateWidth);
+        sendBtn?.removeEventListener('click', handleSendClick);
+        inputEl?.removeEventListener('keydown', handleInputKeydown);
+        if (chatWindow.isConnected) {
+            chatWindow.remove();
+        }
+    };
 };

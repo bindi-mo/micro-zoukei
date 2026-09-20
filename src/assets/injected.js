@@ -3404,9 +3404,9 @@ var InjectedScript = (function(exports) {
     const codeSection = document.getElementById("code-section");
     if (!codeSection) {
       console.error("The chat screen could not be initialized because #code-section could not be found.");
-      return;
+      return () => void 0;
     }
-    if (document.getElementById("agent-chat-window")) return;
+    if (document.getElementById("agent-chat-window")) return () => void 0;
     const chatWindow = document.createElement("div");
     chatWindow.id = "agent-chat-window";
     chatWindow.style.position = "absolute";
@@ -3423,24 +3423,33 @@ var InjectedScript = (function(exports) {
       const splitbarWidth = codeSplitbar ? codeSplitbar.clientWidth : 0;
       const offsetWidth = sidemenuWidth + runtimeWidth + splitbarWidth;
       if (offsetWidth > 0) {
-        const mainWidth = window.innerWidth - offsetWidth;
-        chatWindow.style.width = `${mainWidth}px`;
+        chatWindow.style.width = `${window.innerWidth - offsetWidth}px`;
+      }
+    };
+    const handleSendClick = () => handleSendMessage();
+    const handleInputKeydown = (event) => {
+      const keyEvent = event;
+      if (keyEvent.key === "Enter" && !keyEvent.isComposing) {
+        event.preventDefault();
+        handleSendMessage();
       }
     };
     window.addEventListener("resize", updateWidth);
     chatWindow.innerHTML = createChatMarkup();
     codeSection.appendChild(chatWindow);
     const sendBtn = chatWindow.querySelector("#chat-send-button");
-    sendBtn?.addEventListener("click", handleSendMessage);
+    sendBtn?.addEventListener("click", handleSendClick);
     const inputEl = chatWindow.querySelector("#chat-user-input");
-    inputEl?.addEventListener("keydown", (e) => {
-      const keyEvent = e;
-      if (keyEvent.key === "Enter" && !keyEvent.isComposing) {
-        e.preventDefault();
-        handleSendMessage();
-      }
-    });
+    inputEl?.addEventListener("keydown", handleInputKeydown);
     console.log("The UI for the Agent chat window is now ready.");
+    return () => {
+      window.removeEventListener("resize", updateWidth);
+      sendBtn?.removeEventListener("click", handleSendClick);
+      inputEl?.removeEventListener("keydown", handleInputKeydown);
+      if (chatWindow.isConnected) {
+        chatWindow.remove();
+      }
+    };
   };
   const getTargetExtensions = (lang) => {
     const langLower = lang.toLowerCase();
@@ -3579,20 +3588,24 @@ var InjectedScript = (function(exports) {
     return true;
   };
   let isProjectAlreadySaved = false;
+  const NOOP_CLEANUP$1 = () => void 0;
   const overrideProjectLoaded = () => {
     const mainApp = window.app;
     if (!mainApp || typeof mainApp.openProject !== "function") {
       console.error("Not found window.app.openProject.");
-      return;
+      return NOOP_CLEANUP$1;
     }
-    if (mainApp.openProject.__isOverridden) return;
+    if (mainApp.openProject.__isOverridden) return NOOP_CLEANUP$1;
     const originalOpenProject = mainApp.openProject;
+    let cancelled = false;
+    let pendingTimer;
     const newOpenProject = function(...args) {
       const result = originalOpenProject.apply(this, args);
       isProjectAlreadySaved = false;
       let checkCount = 0;
       const MAX_CHECKS = 20;
       const waitForSourceList = async () => {
+        if (cancelled) return;
         if (isProjectAlreadySaved) return;
         const project = window.app?.project;
         if (project && Array.isArray(project.source_list) && project.source_list.length > 0 && isProjectDataReady(project)) {
@@ -3600,6 +3613,7 @@ var InjectedScript = (function(exports) {
           const title = project.title;
           isProjectAlreadySaved = true;
           const currentFiles = await getMicroStudioFileList();
+          if (cancelled) return;
           if (currentFiles.length > 0) {
             saveAllFilesToLocal(title, lang, currentFiles);
           }
@@ -3610,7 +3624,7 @@ var InjectedScript = (function(exports) {
           console.warn(`⚠️ time out`);
           return;
         }
-        setTimeout(waitForSourceList, 200);
+        pendingTimer = setTimeout(waitForSourceList, 200);
       };
       waitForSourceList();
       return result;
@@ -3618,14 +3632,102 @@ var InjectedScript = (function(exports) {
     newOpenProject.__isOverridden = true;
     mainApp.openProject = newOpenProject;
     console.log("The event hook for `window.app.openProject` has completed.");
+    return () => {
+      cancelled = true;
+      if (pendingTimer !== void 0) {
+        clearTimeout(pendingTimer);
+        pendingTimer = void 0;
+      }
+      if (mainApp.openProject === newOpenProject) {
+        mainApp.openProject = originalOpenProject;
+      }
+      delete newOpenProject.__isOverridden;
+      isProjectAlreadySaved = false;
+    };
   };
+  const UI_STYLE_ID = "micro-zoukei-uiex-styles";
+  const FULLSCREEN_CLONE_ATTRIBUTE = "data-micro-zoukei-fullscreen-clone";
+  const NOOP_CLEANUP = () => void 0;
+  const registrations = /* @__PURE__ */ new Map();
+  const removedElementSnapshots = /* @__PURE__ */ new Map();
   let flag_morespace = false;
-  let elm = null;
   let morespace_icon = null;
   let cachedCodeEditor = null;
   let createdMoreSpaceIcon = false;
   let initializeAppExtensionCleanup = null;
   let initializationGeneration = 0;
+  let fullscreenClone = null;
+  let fullscreenClickHandler = null;
+  let fullscreenChangeListener = null;
+  let wrappedCreateFullscreenFeatures = null;
+  let originalSetSection = null;
+  let wrappedSetSection = null;
+  let headerTransitionProperty = "";
+  let headerTransitionDuration = "";
+  let headerTransitionEndHandler = null;
+  let headerTransitionStartHandler = null;
+  const runCleanup = (id) => {
+    const registration = registrations.get(id);
+    if (!registration) return;
+    registrations.delete(id);
+    try {
+      registration.cleanup();
+    } catch (error) {
+      console.error(`[MicroZoukei] Failed to clean up ${id}:`, error);
+    }
+  };
+  const registerElement = (id, selector, cleanup) => {
+    runCleanup(id);
+    registrations.set(id, { id, selector, cleanup });
+  };
+  const cleanupRegistrations = () => {
+    for (const registration of [...registrations.values()].reverse()) {
+      runCleanup(registration.id);
+    }
+  };
+  const captureElementSnapshot = (id, selector, element) => {
+    if (!(element.parentNode instanceof Element)) {
+      throw new Error(`Cannot snapshot ${selector}: its parent is not an Element`);
+    }
+    const attributes = {};
+    for (const attribute of Array.from(element.attributes)) {
+      attributes[attribute.name] = attribute.value;
+    }
+    const snapshot = {
+      id,
+      selector,
+      element,
+      parent: element.parentNode,
+      nextSibling: element.nextSibling,
+      attributes,
+      inlineStyleText: element.getAttribute("style") ?? "",
+      computedStyleText: window.getComputedStyle(element).cssText
+    };
+    removedElementSnapshots.set(id, snapshot);
+    return snapshot;
+  };
+  const restoreRemovedElement = (id) => {
+    const snapshot = removedElementSnapshots.get(id);
+    if (!snapshot) return;
+    removedElementSnapshots.delete(id);
+    const { element, parent, nextSibling, selector, attributes } = snapshot;
+    const current = parent.querySelector(selector);
+    if (current && current !== element) {
+      current.remove();
+    }
+    for (const attribute of Array.from(element.attributes)) {
+      if (!(attribute.name in attributes)) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+    for (const [name, value] of Object.entries(attributes)) {
+      element.setAttribute(name, value);
+    }
+    if (!element.isConnected) {
+      const reference = nextSibling?.parentNode === parent ? nextSibling : null;
+      parent.insertBefore(element, reference);
+    }
+  };
   const visible_header = (visible) => {
     const header = document.getElementsByTagName("header")[0];
     const container = document.getElementsByClassName("main-container")[0];
@@ -3646,70 +3748,44 @@ var InjectedScript = (function(exports) {
   };
   const visible_sidemenu = (visible) => {
     const sidemenu = document.getElementsByClassName("sidemenu")[0];
-    if (sidemenu) {
-      if (sidemenu instanceof HTMLElement) {
-        if (visible) {
-          sidemenu.style.left = "0";
-        } else {
-          sidemenu.style.left = "-60px";
-        }
-      }
+    if (sidemenu instanceof HTMLElement) {
+      sidemenu.style.left = visible ? "0" : "-60px";
     }
     const container = document.getElementsByClassName("section-container")[0];
-    if (container) {
-      if (container instanceof HTMLElement) {
-        if (visible) {
-          container.style.left = "60px";
-          container.style.borderLeft = "solid 10px hsl(200,30%,30%)";
-          container.style.borderRadius = "10px 0 0 0";
-        } else {
-          container.style.left = "1px";
-          container.style.borderLeft = "solid 1px hsl(200,30%,30%)";
-          container.style.borderRadius = "0";
-        }
+    if (container instanceof HTMLElement) {
+      if (visible) {
+        container.style.left = "60px";
+        container.style.borderLeft = "solid 10px hsl(200,30%,30%)";
+        container.style.borderRadius = "10px 0 0 0";
+      } else {
+        container.style.left = "1px";
+        container.style.borderLeft = "solid 1px hsl(200,30%,30%)";
+        container.style.borderRadius = "0";
       }
     }
   };
   const visible_runbar = (visible) => {
-    elm = document.getElementById("runbar");
-    if (elm) {
-      const firstRunbar = elm.children[0];
-      if (firstRunbar instanceof HTMLElement) {
-        if (visible) {
-          firstRunbar.style.display = "inline-block";
-        } else {
-          firstRunbar.style.display = "none";
-        }
-      }
-      const secondRunbar = elm.children[1];
-      if (secondRunbar instanceof HTMLElement) {
-        if (visible) {
-          secondRunbar.style.marginLeft = "20px";
-        } else {
-          secondRunbar.style.marginLeft = "0";
-        }
-      }
+    const runbar = document.getElementById("runbar");
+    if (!runbar) return;
+    const firstRunbar = runbar.children[0];
+    if (firstRunbar instanceof HTMLElement) {
+      firstRunbar.style.display = visible ? "inline-block" : "none";
+    }
+    const secondRunbar = runbar.children[1];
+    if (secondRunbar instanceof HTMLElement) {
+      secondRunbar.style.marginLeft = visible ? "20px" : "0";
     }
   };
   const visible_terminal_toolbar = (visible) => {
-    elm = document.getElementById("terminal-toolbar");
-    if (elm) {
-      const firstChild = elm.children[0];
-      if (firstChild instanceof HTMLElement) {
-        if (visible) {
-          firstChild.style.display = "inline-block";
-        } else {
-          firstChild.style.display = "none";
-        }
-      }
-      const secondChild = elm.children[1];
-      if (secondChild instanceof HTMLElement) {
-        if (visible) {
-          secondChild.style.marginLeft = "20px";
-        } else {
-          secondChild.style.marginLeft = "0";
-        }
-      }
+    const terminalToolbar = document.getElementById("terminal-toolbar");
+    if (!terminalToolbar) return;
+    const firstChild = terminalToolbar.children[0];
+    if (firstChild instanceof HTMLElement) {
+      firstChild.style.display = visible ? "inline-block" : "none";
+    }
+    const secondChild = terminalToolbar.children[1];
+    if (secondChild instanceof HTMLElement) {
+      secondChild.style.marginLeft = visible ? "20px" : "0";
     }
   };
   const hide_morespace = () => {
@@ -3737,102 +3813,174 @@ var InjectedScript = (function(exports) {
   };
   const injectAgentMenuItem = (appui) => {
     const ulElement = document.querySelector("#sidemenu ul");
-    if (ulElement && document.getElementById("menuitem-agent") === null) {
-      const htmlString = `
-          <li id="menuitem-agent">
-            <i class="fas fa-robot"></i><br> Agent</li>
-        `.trim();
-      ulElement.insertAdjacentHTML("afterbegin", htmlString);
-      const agentMenu = document.getElementById("menuitem-agent");
-      agentMenu?.addEventListener("click", (event) => {
-        const targetAppUi = appui;
-        if (targetAppUi && typeof targetAppUi.setSection === "function") {
-          targetAppUi.setSection("agent", true);
-        }
-      });
-    } else if (!ulElement) {
-      console.error("The specified `ul` element was not found.");
+    if (!ulElement) {
+      throw new Error("The specified `ul` element was not found.");
     }
+    const existingMenuItem = document.getElementById("menuitem-agent");
+    if (existingMenuItem) {
+      return NOOP_CLEANUP;
+    }
+    const htmlString = `
+      <li id="menuitem-agent">
+        <i class="fas fa-robot"></i><br> Agent</li>
+    `.trim();
+    ulElement.insertAdjacentHTML("afterbegin", htmlString);
+    const agentMenu = document.getElementById("menuitem-agent");
+    if (!agentMenu) {
+      throw new Error("Failed to insert the Agent menu item.");
+    }
+    const handleAgentMenuClick = () => {
+      if (appui && typeof appui.setSection === "function") {
+        appui.setSection("agent", true);
+      }
+    };
+    agentMenu.addEventListener("click", handleAgentMenuClick);
+    return () => {
+      agentMenu.removeEventListener("click", handleAgentMenuClick);
+      if (agentMenu.isConnected) {
+        agentMenu.remove();
+      }
+    };
+  };
+  const removeElement = (id, selector) => {
+    const element = document.querySelector(selector);
+    if (!element) {
+      registerElement(id, selector, NOOP_CLEANUP);
+      return;
+    }
+    registerElement(id, selector, NOOP_CLEANUP);
+    element.remove();
   };
   const removeElements = () => {
-    const discordLink = document.querySelector(
+    removeElement(
+      "discord-link",
       'a[href="https://discord.com/invite/BDMqjxd"][target="_blank"]'
     );
-    if (discordLink) {
-      discordLink.remove();
-    }
-    const communityLink = document.querySelector(
+    removeElement(
+      "community-link",
       'a[href="/community/"][target="_blank"]'
     );
-    if (communityLink) {
-      communityLink.remove();
-    }
   };
   const overrideCreateFullscreenFeatures = (appui) => {
     if (!appui || typeof appui.createFullscreenFeatures !== "function") {
       console.error("Not found appui.createFullscreenFeatures function");
-      return;
+      return NOOP_CLEANUP;
     }
     const appWindow = getCurrentWebviewWindow();
-    const setupTauriFullscreen = () => {
-      const button = document.getElementById("project-fullscreen");
-      if (button) {
-        const newButton = button.cloneNode(true);
-        button.parentNode?.replaceChild(newButton, button);
-        newButton.addEventListener("click", async (e) => {
+    const originalCreateFullscreenFeatures = appui.createFullscreenFeatures;
+    fullscreenClickHandler = async () => {
+      const activeClone = fullscreenClone;
+      if (!activeClone) return;
+      try {
+        const isFullscreen = await appWindow.isFullscreen();
+        if (isFullscreen) {
+          await appWindow.setFullscreen(false);
           try {
-            const isFullscreen = await appWindow.isFullscreen();
-            if (isFullscreen) {
-              await appWindow.setFullscreen(false);
-              Object.defineProperty(document, "fullscreenElement", { value: null, configurable: true });
-              window.dispatchEvent(new Event("fullscreenchange"));
-            } else {
-              await appWindow.setFullscreen(true);
-              Object.defineProperty(document, "fullscreenElement", {
-                value: document.getElementById("projectview"),
-                configurable: true
-              });
-              window.dispatchEvent(new Event("fullscreenchange"));
-            }
-          } catch (err) {
-            console.error("Tauri Fullscreen Error:", err);
+            Object.defineProperty(document, "fullscreenElement", { value: null, configurable: true });
+          } catch {
           }
-        });
-        window.addEventListener("fullscreenchange", () => {
-          const projectview = document.getElementById("projectview");
-          if (projectview) {
-            if (document.fullscreenElement) {
-              newButton.classList.remove("fa-expand");
-              newButton.classList.add("fa-compress");
-              projectview.style.background = "hsl(200,20%,15%)";
-            } else {
-              newButton.classList.add("fa-expand");
-              newButton.classList.remove("fa-compress");
-              projectview.style.background = "none";
-            }
+          window.dispatchEvent(new Event("fullscreenchange"));
+        } else {
+          await appWindow.setFullscreen(true);
+          try {
+            Object.defineProperty(document, "fullscreenElement", {
+              value: document.getElementById("projectview"),
+              configurable: true
+            });
+          } catch {
           }
-        });
-      } else {
-        console.log("The specified `#project-fullscreen` element was not found.");
+          window.dispatchEvent(new Event("fullscreenchange"));
+        }
+      } catch (err) {
+        console.error("Tauri Fullscreen Error:", err);
       }
     };
-    appui.createFullscreenFeatures = function() {
+    fullscreenChangeListener = () => {
+      const activeClone = fullscreenClone;
+      const projectview = document.getElementById("projectview");
+      if (!activeClone || !projectview) return;
+      if (document.fullscreenElement) {
+        activeClone.classList.remove("fa-expand");
+        activeClone.classList.add("fa-compress");
+        projectview.style.background = "hsl(200,20%,15%)";
+      } else {
+        activeClone.classList.add("fa-expand");
+        activeClone.classList.remove("fa-compress");
+        projectview.style.background = "none";
+      }
+    };
+    const setupTauriFullscreen = () => {
+      const button = document.getElementById("project-fullscreen");
+      if (!button || button.hasAttribute(FULLSCREEN_CLONE_ATTRIBUTE)) {
+        return;
+      }
+      captureElementSnapshot("fullscreen-button", "#project-fullscreen", button);
+      const newButton = button.cloneNode(true);
+      newButton.setAttribute(FULLSCREEN_CLONE_ATTRIBUTE, "true");
+      button.parentNode?.replaceChild(newButton, button);
+      fullscreenClone = newButton;
+      const clickHandler = fullscreenClickHandler;
+      const changeListener = fullscreenChangeListener;
+      if (!clickHandler || !changeListener) {
+        return;
+      }
+      newButton.addEventListener("click", clickHandler);
+      window.addEventListener("fullscreenchange", changeListener);
+    };
+    wrappedCreateFullscreenFeatures = function() {
       setupTauriFullscreen();
     };
+    appui.createFullscreenFeatures = wrappedCreateFullscreenFeatures;
     setupTauriFullscreen();
+    return () => {
+      const clone = fullscreenClone;
+      if (clone) {
+        if (fullscreenClickHandler) {
+          clone.removeEventListener("click", fullscreenClickHandler);
+        }
+        if (fullscreenChangeListener) {
+          window.removeEventListener("fullscreenchange", fullscreenChangeListener);
+        }
+      }
+      restoreRemovedElement("fullscreen-button");
+      if (appui.createFullscreenFeatures === wrappedCreateFullscreenFeatures) {
+        appui.createFullscreenFeatures = originalCreateFullscreenFeatures;
+      }
+      fullscreenClone = null;
+      fullscreenClickHandler = null;
+      fullscreenChangeListener = null;
+      wrappedCreateFullscreenFeatures = null;
+    };
+  };
+  const restoreSetSectionOverride = () => {
+    const appui = window.app?.appui;
+    const codeSection = document.getElementById("code-section");
+    const chatWindow = document.getElementById("agent-chat-window");
+    if (cachedCodeEditor && codeSection) {
+      codeSection.insertBefore(cachedCodeEditor, chatWindow);
+    }
+    cachedCodeEditor = null;
+    if (appui?.setSection === wrappedSetSection && originalSetSection) {
+      appui.setSection = originalSetSection;
+    }
+    originalSetSection = null;
+    wrappedSetSection = null;
   };
   const overrideSetSection = (appui) => {
     if (!appui || typeof appui.setSection !== "function") {
       console.error("Not found appui.setSection function");
-      return;
+      return NOOP_CLEANUP;
     }
-    const originalSetSection = appui.setSection;
-    appui.setSection = function(section, useraction) {
+    if (appui.setSection === wrappedSetSection) {
+      return restoreSetSectionOverride;
+    }
+    const originalSetSectionRef = appui.setSection;
+    const wrappedSetSectionRef = function(section, useraction) {
       let targetSection = section;
       if (section === "agent") {
         targetSection = "code";
       }
-      const result = originalSetSection.apply(this, [targetSection, useraction]);
+      const result = originalSetSectionRef.apply(this, [targetSection, useraction]);
       const codeSection = document.getElementById("code-section");
       const codeEditor = document.getElementById("code-editor");
       const chatWindow = document.getElementById("agent-chat-window");
@@ -3865,6 +4013,10 @@ var InjectedScript = (function(exports) {
       }
       console.log("Successfully hijacked and extended setSection.");
     };
+    originalSetSection = originalSetSectionRef;
+    wrappedSetSection = wrappedSetSectionRef;
+    appui.setSection = wrappedSetSectionRef;
+    return restoreSetSectionOverride;
   };
   let originalSetMainSection = null;
   let wrappedSetMainSection = null;
@@ -3899,6 +4051,7 @@ var InjectedScript = (function(exports) {
   };
   const injectRequiredStyles = () => {
     const style = document.createElement("style");
+    style.id = UI_STYLE_ID;
     style.textContent = `
     .projectoption select {
       color: rgba(0,0,0, .8)
@@ -3918,6 +4071,7 @@ var InjectedScript = (function(exports) {
     }
         `;
     document.head.appendChild(style);
+    return () => style.remove();
   };
   const normalizePathname = (pathname) => {
     const normalized = pathname.trim();
@@ -3925,55 +4079,94 @@ var InjectedScript = (function(exports) {
     return withLeadingSlash.endsWith("/") ? withLeadingSlash : `${withLeadingSlash}/`;
   };
   const isProjectsRoute = () => normalizePathname(window.location.pathname) === "/projects/";
+  const setupHeaderResizeAnimation = () => {
+    const header = document.getElementsByTagName("header")[0];
+    if (!(header instanceof HTMLElement)) {
+      return NOOP_CLEANUP;
+    }
+    const style = window.getComputedStyle(header);
+    headerTransitionProperty = style.getPropertyValue("transition-property");
+    headerTransitionDuration = style.getPropertyValue("transition-duration");
+    header.style.transitionProperty = `${headerTransitionProperty}, top`;
+    header.style.transitionDuration = `${headerTransitionDuration}, 0.5s`;
+    headerTransitionEndHandler = (event) => {
+      if (event.propertyName === "top") {
+        window.dispatchEvent(new Event("resize"));
+      }
+    };
+    headerTransitionStartHandler = (event) => {
+      if (event.propertyName === "top") {
+        window.dispatchEvent(new Event("resize"));
+      }
+    };
+    header.addEventListener("transitionend", headerTransitionEndHandler);
+    header.addEventListener("transitionstart", headerTransitionStartHandler);
+    return () => {
+      if (headerTransitionEndHandler) {
+        header.removeEventListener("transitionend", headerTransitionEndHandler);
+      }
+      if (headerTransitionStartHandler) {
+        header.removeEventListener("transitionstart", headerTransitionStartHandler);
+      }
+      header.style.transitionProperty = headerTransitionProperty;
+      header.style.transitionDuration = headerTransitionDuration;
+      headerTransitionProperty = "";
+      headerTransitionDuration = "";
+      headerTransitionEndHandler = null;
+      headerTransitionStartHandler = null;
+    };
+  };
   const initializeAppExtension = async () => {
     initializeAppExtensionCleanup?.();
     const generation = ++initializationGeneration;
     await startInitialIndexEventListening();
-    removeElements();
-    const projectIcon = document.getElementById("project-icon");
-    if (!document.getElementById("project-morespace") && projectIcon instanceof HTMLElement) {
-      const icon = document.createElement("i");
-      icon.setAttribute("class", "fas fa-expand-arrows-alt");
-      icon.setAttribute("id", "project-morespace");
-      icon.setAttribute("title", "Toggle More Space");
-      icon.onclick = () => {
-        toggle_morespace();
-      };
-      projectIcon.after(icon);
-      morespace_icon = icon;
-      createdMoreSpaceIcon = true;
-    }
-    elm = document.getElementsByTagName("header")[0];
-    const style = window.getComputedStyle(elm);
-    let prop = style.getPropertyValue("transition-property");
-    elm.style.transitionProperty = prop + ", top";
-    prop = style.getPropertyValue("transition-duration");
-    elm.style.transitionDuration = prop + ", 0.5s";
-    elm.ontransitionend = () => {
-      window.dispatchEvent(new Event("resize"));
-    };
-    elm.ontransitionstart = () => {
-      window.dispatchEvent(new Event("resize"));
-    };
-    injectRequiredStyles();
-    const targetAppUi = window.app?.appui;
-    injectAgentMenuItem(targetAppUi);
-    overrideSetSection(targetAppUi);
-    overrideCreateFullscreenFeatures(targetAppUi);
-    setupAgentChatWindow();
-    overrideProjectLoaded();
-    let restoreSetMainSection = null;
-    if (targetAppUi && typeof targetAppUi.setMainSection === "function") {
-      restoreSetMainSection = overrideSetMainSection(targetAppUi);
-    }
-    if (isProjectsRoute()) {
-      void requestInitialIndexForProjectsRoute();
+    try {
+      removeElements();
+      const projectIcon = document.getElementById("project-icon");
+      if (!document.getElementById("project-morespace") && projectIcon instanceof HTMLElement) {
+        const icon = document.createElement("i");
+        icon.setAttribute("class", "fas fa-expand-arrows-alt");
+        icon.setAttribute("id", "project-morespace");
+        icon.setAttribute("title", "Toggle More Space");
+        icon.onclick = () => {
+          toggle_morespace();
+        };
+        projectIcon.after(icon);
+        morespace_icon = icon;
+        createdMoreSpaceIcon = true;
+      }
+      registerElement("header-resize", "header", setupHeaderResizeAnimation());
+      registerElement("uiex-styles", `#${UI_STYLE_ID}`, injectRequiredStyles());
+      const targetAppUi = window.app?.appui;
+      registerElement("agent-menu-item", "#menuitem-agent", injectAgentMenuItem(targetAppUi));
+      registerElement("set-section-override", "appui.setSection", overrideSetSection(targetAppUi));
+      registerElement(
+        "fullscreen-override",
+        "#project-fullscreen",
+        overrideCreateFullscreenFeatures(targetAppUi)
+      );
+      registerElement("agent-chat-window", "#agent-chat-window", setupAgentChatWindow());
+      registerElement("project-loaded-override", "app.openProject", overrideProjectLoaded());
+      if (targetAppUi && typeof targetAppUi.setMainSection === "function") {
+        registerElement(
+          "set-main-section-override",
+          "appui.setMainSection",
+          overrideSetMainSection(targetAppUi)
+        );
+      }
+      if (isProjectsRoute()) {
+        void requestInitialIndexForProjectsRoute();
+      }
+    } catch (error) {
+      cleanupRegistrations();
+      cleanupInitialIndexLifecycle();
+      throw error;
     }
     const cleanup = () => {
       if (generation !== initializationGeneration) {
         return;
       }
-      restoreSetMainSection?.();
+      cleanupRegistrations();
       cleanupInitialIndexLifecycle();
       if (createdMoreSpaceIcon && morespace_icon?.isConnected) {
         morespace_icon.remove();
@@ -3981,11 +4174,10 @@ var InjectedScript = (function(exports) {
       if (morespace_icon) {
         morespace_icon.onclick = null;
       }
-      if (createdMoreSpaceIcon) {
-        flag_morespace = false;
-      }
       createdMoreSpaceIcon = false;
       morespace_icon = null;
+      flag_morespace = false;
+      cachedCodeEditor = null;
       initializeAppExtensionCleanup = null;
     };
     initializeAppExtensionCleanup = cleanup;

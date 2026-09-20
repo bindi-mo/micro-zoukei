@@ -215,18 +215,24 @@ const isProjectDataReady = (project: any): boolean => {
 // Add a flag outside the function (in the module scope)
 let isProjectAlreadySaved = false;
 
-export const overrideProjectLoaded = (): void => {
+type Cleanup = () => void;
+
+const NOOP_CLEANUP: Cleanup = () => undefined;
+
+export const overrideProjectLoaded = (): Cleanup => {
     const mainApp = (window as any).app;
 
     if (!mainApp || typeof mainApp.openProject !== 'function') {
         console.error('Not found window.app.openProject.');
-        return;
+        return NOOP_CLEANUP;
     }
 
     // Prevent Double Hooks (Duplicate Registrations)
-    if ((mainApp.openProject as any).__isOverridden) return;
+    if ((mainApp.openProject as any).__isOverridden) return NOOP_CLEANUP;
 
     const originalOpenProject = mainApp.openProject;
+    let cancelled = false;
+    let pendingTimer: ReturnType<typeof setTimeout> | undefined;
 
     const newOpenProject = function (this: any, ...args: any[]) {
         const result = originalOpenProject.apply(this, args);
@@ -238,6 +244,9 @@ export const overrideProjectLoaded = (): void => {
         const MAX_CHECKS = 20;
 
         const waitForSourceList = async (): Promise<void> => {
+            // Stop if the override has been cleaned up.
+            if (cancelled) return;
+
             // If it has already been saved, terminate the process immediately.
             if (isProjectAlreadySaved) return;
 
@@ -252,6 +261,7 @@ export const overrideProjectLoaded = (): void => {
                 isProjectAlreadySaved = true;
 
                 const currentFiles = await getMicroStudioFileList();
+                if (cancelled) return;
                 if (currentFiles.length > 0) {
                     saveAllFilesToLocal(title, lang, currentFiles);
                 }
@@ -264,7 +274,7 @@ export const overrideProjectLoaded = (): void => {
                 return;
             }
 
-            setTimeout(waitForSourceList, 200);
+            pendingTimer = setTimeout(waitForSourceList, 200);
         };
 
         waitForSourceList();
@@ -277,4 +287,19 @@ export const overrideProjectLoaded = (): void => {
     mainApp.openProject = newOpenProject;
 
     console.log('The event hook for `window.app.openProject` has completed.');
+
+    return () => {
+        cancelled = true;
+        if (pendingTimer !== undefined) {
+            clearTimeout(pendingTimer);
+            pendingTimer = undefined;
+        }
+
+        // Only restore if our wrapper is still installed.
+        if (mainApp.openProject === newOpenProject) {
+            mainApp.openProject = originalOpenProject;
+        }
+        delete (newOpenProject as any).__isOverridden;
+        isProjectAlreadySaved = false;
+    };
 };

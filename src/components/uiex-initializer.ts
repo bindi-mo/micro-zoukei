@@ -7,13 +7,127 @@ import {
 } from './initial-index';
 import { overrideProjectLoaded } from './project-files';
 
+type Cleanup = () => void;
+
+interface ElementRegistration {
+    id: string;
+    selector: string;
+    cleanup: Cleanup;
+}
+
+interface RemovedElementSnapshot {
+    id: string;
+    selector: string;
+    element: Element;
+    parent: Element;
+    nextSibling: Node | null;
+    attributes: Record<string, string>;
+    inlineStyleText: string;
+    computedStyleText: string;
+}
+
+const UI_STYLE_ID = 'micro-zoukei-uiex-styles';
+const FULLSCREEN_CLONE_ATTRIBUTE = 'data-micro-zoukei-fullscreen-clone';
+const NOOP_CLEANUP: Cleanup = () => undefined;
+
+const registrations = new Map<string, ElementRegistration>();
+const removedElementSnapshots = new Map<string, RemovedElementSnapshot>();
+
 let flag_morespace = false;
-let elm = null;
 let morespace_icon: HTMLElement | null = null;
 let cachedCodeEditor: HTMLElement | null = null;
 let createdMoreSpaceIcon = false;
-let initializeAppExtensionCleanup: (() => void) | null = null;
+let initializeAppExtensionCleanup: Cleanup | null = null;
 let initializationGeneration = 0;
+let fullscreenClone: HTMLElement | null = null;
+let fullscreenClickHandler: ((event: MouseEvent) => void) | null = null;
+let fullscreenChangeListener: (() => void) | null = null;
+let wrappedCreateFullscreenFeatures: (() => void) | null = null;
+let originalSetSection: ((section: string, useraction: boolean) => any) | null = null;
+let wrappedSetSection: ((section: string, useraction: boolean) => any) | null = null;
+let headerElement: HTMLElement | null = null;
+let headerTransitionProperty = '';
+let headerTransitionDuration = '';
+let headerTransitionEndHandler: ((this: HTMLElement, event: TransitionEvent) => void) | null = null;
+let headerTransitionStartHandler: ((this: HTMLElement, event: TransitionEvent) => void) | null = null;
+
+const runCleanup = (id: string): void => {
+    const registration = registrations.get(id);
+    if (!registration) return;
+
+    registrations.delete(id);
+    try {
+        registration.cleanup();
+    } catch (error) {
+        console.error(`[MicroZoukei] Failed to clean up ${id}:`, error);
+    }
+};
+
+const registerElement = (id: string, selector: string, cleanup: Cleanup): void => {
+    runCleanup(id);
+    registrations.set(id, { id, selector, cleanup });
+};
+
+const cleanupRegistrations = (): void => {
+    for (const registration of [...registrations.values()].reverse()) {
+        runCleanup(registration.id);
+    }
+};
+
+const captureElementSnapshot = (
+    id: string,
+    selector: string,
+    element: Element
+): RemovedElementSnapshot => {
+    if (!(element.parentNode instanceof Element)) {
+        throw new Error(`Cannot snapshot ${selector}: its parent is not an Element`);
+    }
+
+    const attributes: Record<string, string> = {};
+    for (const attribute of Array.from(element.attributes)) {
+        attributes[attribute.name] = attribute.value;
+    }
+
+    const snapshot: RemovedElementSnapshot = {
+        id,
+        selector,
+        element,
+        parent: element.parentNode,
+        nextSibling: element.nextSibling,
+        attributes,
+        inlineStyleText: element.getAttribute('style') ?? '',
+        computedStyleText: window.getComputedStyle(element).cssText,
+    };
+    removedElementSnapshots.set(id, snapshot);
+    return snapshot;
+};
+
+const restoreRemovedElement = (id: string): void => {
+    const snapshot = removedElementSnapshots.get(id);
+    if (!snapshot) return;
+
+    removedElementSnapshots.delete(id);
+    const { element, parent, nextSibling, selector, attributes } = snapshot;
+
+    const current = parent.querySelector(selector);
+    if (current && current !== element) {
+        current.remove();
+    }
+
+    for (const attribute of Array.from(element.attributes)) {
+        if (!(attribute.name in attributes)) {
+            element.removeAttribute(attribute.name);
+        }
+    }
+    for (const [name, value] of Object.entries(attributes)) {
+        element.setAttribute(name, value);
+    }
+
+    if (!element.isConnected) {
+        const reference = nextSibling?.parentNode === parent ? nextSibling : null;
+        parent.insertBefore(element, reference);
+    }
+};
 
 // ---------------------------------------------------
 // function
@@ -33,88 +147,60 @@ const visible_header = (visible: boolean): void => {
                 container.style.top = "60px";
             } else {
                 container.style.top = "0";
-
             }
         }
     }
-}
+};
 
 const visible_sidemenu = (visible: boolean): void => {
     const sidemenu = document.getElementsByClassName("sidemenu")[0];
-    if (sidemenu) {
-        if (sidemenu instanceof HTMLElement) {
-            if (visible) {
-                sidemenu.style.left = "0";
-            } else {
-                sidemenu.style.left = "-60px";
-            }
-        }
+    if (sidemenu instanceof HTMLElement) {
+        sidemenu.style.left = visible ? "0" : "-60px";
     }
 
     const container = document.getElementsByClassName("section-container")[0];
-    if (container) {
-        if (container instanceof HTMLElement) {
-            if (visible) {
-                container.style.left = "60px";
-                container.style.borderLeft = "solid 10px hsl(200,30%,30%)";
-                container.style.borderRadius = "10px 0 0 0";
-            } else {
-                container.style.left = "1px";
-                container.style.borderLeft = "solid 1px hsl(200,30%,30%)";
-                container.style.borderRadius = "0";
-
-            }
+    if (container instanceof HTMLElement) {
+        if (visible) {
+            container.style.left = "60px";
+            container.style.borderLeft = "solid 10px hsl(200,30%,30%)";
+            container.style.borderRadius = "10px 0 0 0";
+        } else {
+            container.style.left = "1px";
+            container.style.borderLeft = "solid 1px hsl(200,30%,30%)";
+            container.style.borderRadius = "0";
         }
     }
-}
+};
 
-// runbar
 const visible_runbar = (visible: boolean): void => {
-    elm = document.getElementById('runbar');
-    if (elm) {
-        const firstRunbar = elm.children[0];
-        if (firstRunbar instanceof HTMLElement) {
-            if (visible) {
-                firstRunbar.style.display = 'inline-block';
-            } else {
-                firstRunbar.style.display = 'none';
-            }
-        }
+    const runbar = document.getElementById('runbar');
+    if (!runbar) return;
 
-        const secondRunbar = elm.children[1];
-        if (secondRunbar instanceof HTMLElement) {
-            if (visible) {
-                secondRunbar.style.marginLeft = '20px';
-            } else {
-                secondRunbar.style.marginLeft = '0';
-            }
-        }
+    const firstRunbar = runbar.children[0];
+    if (firstRunbar instanceof HTMLElement) {
+        firstRunbar.style.display = visible ? 'inline-block' : 'none';
     }
-}
 
-// terminal
+    const secondRunbar = runbar.children[1];
+    if (secondRunbar instanceof HTMLElement) {
+        secondRunbar.style.marginLeft = visible ? '20px' : '0';
+    }
+};
+
 const visible_terminal_toolbar = (visible: boolean): void => {
-    elm = document.getElementById('terminal-toolbar');
-    if (elm) {
-        const firstChild = elm.children[0];
-        if (firstChild instanceof HTMLElement) {
-            if (visible) {
-                firstChild.style.display = 'inline-block';
-            } else {
-                firstChild.style.display = 'none';
-            }
-        }
+    const terminalToolbar = document.getElementById('terminal-toolbar');
+    if (!terminalToolbar) return;
 
-        const secondChild = elm.children[1];
-        if (secondChild instanceof HTMLElement) {
-            if (visible) {
-                secondChild.style.marginLeft = '20px';
-            } else {
-                secondChild.style.marginLeft = '0';
-            }
-        }
+    const firstChild = terminalToolbar.children[0];
+    if (firstChild instanceof HTMLElement) {
+        firstChild.style.display = visible ? 'inline-block' : 'none';
     }
-}
+
+    const secondChild = terminalToolbar.children[1];
+    if (secondChild instanceof HTMLElement) {
+        secondChild.style.marginLeft = visible ? '20px' : '0';
+    }
+};
 
 const hide_morespace = (): void => {
     visible_header(false);
@@ -146,128 +232,224 @@ const toggle_morespace = (): void => {
     flag_morespace = !flag_morespace;
 }
 
-const injectAgentMenuItem = (appui: any): void => {
+const injectAgentMenuItem = (appui: any): Cleanup => {
     const ulElement = document.querySelector<HTMLUListElement>('#sidemenu ul');
-    if (ulElement && document.getElementById('menuitem-agent') === null) {
-        const htmlString = `
-          <li id="menuitem-agent">
-            <i class="fas fa-robot"></i><br> Agent</li>
-        `.trim();
-
-        ulElement.insertAdjacentHTML('afterbegin', htmlString);
-        const agentMenu = document.getElementById('menuitem-agent');
-        agentMenu?.addEventListener('click', (event: MouseEvent) => {
-            const targetAppUi = appui;
-            if (targetAppUi && typeof targetAppUi.setSection === 'function') {
-                // The value "true" for the second argument indicates that
-                // the switch was initiated by the user.
-                targetAppUi.setSection("agent", true);
-            }
-        });
-    } else if (!ulElement) {
-        console.error('The specified `ul` element was not found.');
+    if (!ulElement) {
+        throw new Error('The specified `ul` element was not found.');
     }
+
+    const existingMenuItem = document.getElementById('menuitem-agent');
+    if (existingMenuItem) {
+        return NOOP_CLEANUP;
+    }
+
+    const htmlString = `
+      <li id="menuitem-agent">
+        <i class="fas fa-robot"></i><br> Agent</li>
+    `.trim();
+
+    ulElement.insertAdjacentHTML('afterbegin', htmlString);
+    const agentMenu = document.getElementById('menuitem-agent');
+    if (!agentMenu) {
+        throw new Error('Failed to insert the Agent menu item.');
+    }
+
+    const handleAgentMenuClick = (): void => {
+        if (appui && typeof appui.setSection === 'function') {
+            // The value "true" for the second argument indicates that
+            // the switch was initiated by the user.
+            appui.setSection('agent', true);
+        }
+    };
+
+    agentMenu.addEventListener('click', handleAgentMenuClick);
+    return () => {
+        agentMenu.removeEventListener('click', handleAgentMenuClick);
+        if (agentMenu.isConnected) {
+            agentMenu.remove();
+        }
+    };
 };
 
 // --------------------------------------------------------------------
 // Deleting (or Hiding) Unnecessary Existing Elements
 // --------------------------------------------------------------------
+const removeElement = (id: string, selector: string): void => {
+    const element = document.querySelector(selector);
+    if (!element) {
+        registerElement(id, selector, NOOP_CLEANUP);
+        return;
+    }
+
+    registerElement(id, selector, NOOP_CLEANUP);
+    element.remove();
+};
+
 const removeElements = (): void => {
-    const discordLink = document.querySelector<HTMLAnchorElement>(
+    removeElement(
+        'discord-link',
         'a[href="https://discord.com/invite/BDMqjxd"][target="_blank"]'
     );
-    if (discordLink) {
-        discordLink.remove();
-    }
 
-    const communityLink = document.querySelector<HTMLAnchorElement>(
+    removeElement(
+        'community-link',
         'a[href="/community/"][target="_blank"]'
     );
-    if (communityLink) {
-        communityLink.remove();
-    }
-}
+};
 
-const overrideCreateFullscreenFeatures = (appui: any): void => {
+const overrideCreateFullscreenFeatures = (appui: any): Cleanup => {
     if (!appui || typeof appui.createFullscreenFeatures !== 'function') {
         console.error('Not found appui.createFullscreenFeatures function');
-        return;
+        return NOOP_CLEANUP;
     }
 
     const appWindow = getCurrentWebviewWindow();
-    const setupTauriFullscreen = () => {
-        const button = document.getElementById("project-fullscreen");
+    const originalCreateFullscreenFeatures = appui.createFullscreenFeatures;
 
-        if (button) {
-            // [Most Important] By cloning and replacing the original Listener
-            // element that causes crashes—which has already been registered—you
-            // can completely remove it (force a reset).
-            const newButton = button.cloneNode(true) as HTMLElement;
-            button.parentNode?.replaceChild(newButton, button);
+    fullscreenClickHandler = async (): Promise<void> => {
+        const activeClone = fullscreenClone;
+        if (!activeClone) return;
 
-            // Register a secure Tauri listener for the new button
-            newButton.addEventListener("click", async (e) => {
+        try {
+            const isFullscreen = await appWindow.isFullscreen();
+            if (isFullscreen) {
+                await appWindow.setFullscreen(false);
                 try {
-                    const isFullscreen = await appWindow.isFullscreen();
-                    if (isFullscreen) {
-                        await appWindow.setFullscreen(false);
-                        Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
-                        window.dispatchEvent(new Event('fullscreenchange'));
-                    } else {
-                        await appWindow.setFullscreen(true);
-                        Object.defineProperty(document, 'fullscreenElement', {
-                            value: document.getElementById("projectview"),
-                            configurable: true
-                        });
-                        window.dispatchEvent(new Event('fullscreenchange'));
-                    }
-                } catch (err) {
-                    console.error("Tauri Fullscreen Error:", err);
+                    Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
+                } catch {
+                    // Some webviews expose a non-configurable fullscreenElement.
                 }
-            });
-
-            // Logic for switching icons and background colors
-            // (inherits the display logic from the original code)
-            window.addEventListener("fullscreenchange", () => {
-                const projectview = document.getElementById("projectview");
-                if (projectview) {
-                    if (document.fullscreenElement) {
-                        newButton.classList.remove("fa-expand");
-                        newButton.classList.add("fa-compress");
-                        projectview.style.background = "hsl(200,20%,15%)";
-                    } else {
-                        newButton.classList.add("fa-expand");
-                        newButton.classList.remove("fa-compress");
-                        projectview.style.background = "none";
-                    }
+                window.dispatchEvent(new Event('fullscreenchange'));
+            } else {
+                await appWindow.setFullscreen(true);
+                try {
+                    Object.defineProperty(document, 'fullscreenElement', {
+                        value: document.getElementById("projectview"),
+                        configurable: true
+                    });
+                } catch {
+                    // Some webviews expose a non-configurable fullscreenElement.
                 }
-            });
-        } else {
-            console.log("The specified `#project-fullscreen` element was not found.");
+                window.dispatchEvent(new Event('fullscreenchange'));
+            }
+        } catch (err) {
+            console.error("Tauri Fullscreen Error:", err);
         }
     };
 
-    // 1. Override the instance method itself directly so that it will work properly when called in the future.
-    appui.createFullscreenFeatures = function () {
-        setupTauriFullscreen();
+    fullscreenChangeListener = (): void => {
+        const activeClone = fullscreenClone;
+        const projectview = document.getElementById("projectview");
+        if (!activeClone || !projectview) return;
+
+        if (document.fullscreenElement) {
+            activeClone.classList.remove("fa-expand");
+            activeClone.classList.add("fa-compress");
+            projectview.style.background = "hsl(200,20%,15%)";
+        } else {
+            activeClone.classList.add("fa-expand");
+            activeClone.classList.remove("fa-compress");
+            projectview.style.background = "none";
+        }
     };
 
-    // 2. Since it has already been executed on the microStudio side, it will be applied immediately.
+    const setupTauriFullscreen = (): void => {
+        const button = document.getElementById("project-fullscreen");
+
+        if (!button || button.hasAttribute(FULLSCREEN_CLONE_ATTRIBUTE)) {
+            return;
+        }
+
+        // Snapshot the original button so cleanup can restore it exactly.
+        captureElementSnapshot('fullscreen-button', '#project-fullscreen', button);
+
+        // Clone the button so the existing microStudio listener is removed and
+        // replaced with a listener that uses the Tauri fullscreen API.
+        const newButton = button.cloneNode(true) as HTMLElement;
+        newButton.setAttribute(FULLSCREEN_CLONE_ATTRIBUTE, 'true');
+        button.parentNode?.replaceChild(newButton, button);
+        fullscreenClone = newButton;
+
+        const clickHandler = fullscreenClickHandler;
+        const changeListener = fullscreenChangeListener;
+        if (!clickHandler || !changeListener) {
+            return;
+        }
+
+        newButton.addEventListener('click', clickHandler);
+        window.addEventListener('fullscreenchange', changeListener);
+    };
+
+    // Override the instance method itself directly so that it will work properly when called in the future.
+    wrappedCreateFullscreenFeatures = function () {
+        setupTauriFullscreen();
+    };
+    appui.createFullscreenFeatures = wrappedCreateFullscreenFeatures;
+
+    // Since it has already been executed on the microStudio side, it will be applied immediately.
     setupTauriFullscreen();
+
+    return () => {
+        const clone = fullscreenClone;
+        if (clone) {
+            if (fullscreenClickHandler) {
+                clone.removeEventListener('click', fullscreenClickHandler);
+            }
+            if (fullscreenChangeListener) {
+                window.removeEventListener('fullscreenchange', fullscreenChangeListener);
+            }
+        }
+
+        // Restore the original button (removes the clone via the snapshot selector).
+        restoreRemovedElement('fullscreen-button');
+
+        // Only restore the method if it is still our wrapper.
+        if (appui.createFullscreenFeatures === wrappedCreateFullscreenFeatures) {
+            appui.createFullscreenFeatures = originalCreateFullscreenFeatures;
+        }
+
+        fullscreenClone = null;
+        fullscreenClickHandler = null;
+        fullscreenChangeListener = null;
+        wrappedCreateFullscreenFeatures = null;
+    };
 };
 
-const overrideSetSection = (appui: any): void => {
+const restoreSetSectionOverride = (): void => {
+    const appui = (window as any).app?.appui;
+
+    // Re-insert the cached editor before restoring the original method.
+    const codeSection = document.getElementById('code-section');
+    const chatWindow = document.getElementById('agent-chat-window');
+    if (cachedCodeEditor && codeSection) {
+        codeSection.insertBefore(cachedCodeEditor, chatWindow);
+    }
+    cachedCodeEditor = null;
+
+    if (appui?.setSection === wrappedSetSection && originalSetSection) {
+        appui.setSection = originalSetSection;
+    }
+
+    originalSetSection = null;
+    wrappedSetSection = null;
+};
+
+const overrideSetSection = (appui: any): Cleanup => {
 
     if (!appui || typeof appui.setSection !== 'function') {
         console.error('Not found appui.setSection function');
-        return;
+        return NOOP_CLEANUP;
+    }
+
+    if (appui.setSection === wrappedSetSection) {
+        return restoreSetSectionOverride;
     }
 
     // Copy the original function and save it
-    const originalSetSection = appui.setSection;
+    const originalSetSectionRef = appui.setSection;
 
     // Override a function
-    appui.setSection = function (section: string, useraction: boolean) {
+    const wrappedSetSectionRef = function (this: any, section: string, useraction: boolean) {
         // Declare a variable (the section name to be passed to
         // the original function)
         let targetSection = section;
@@ -283,7 +465,7 @@ const overrideSetSection = (appui: any): void => {
         }
 
         // Execute the original function that was set aside
-        const result = originalSetSection.apply(this, [targetSection, useraction]);
+        const result = originalSetSectionRef.apply(this, [targetSection, useraction]);
 
         // ----------------------------------------------------
         // [Interrupt Handling] Fine-Tuning (Balancing the Books)
@@ -335,6 +517,12 @@ const overrideSetSection = (appui: any): void => {
 
         console.log('Successfully hijacked and extended setSection.');
     };
+
+    originalSetSection = originalSetSectionRef;
+    wrappedSetSection = wrappedSetSectionRef;
+    appui.setSection = wrappedSetSectionRef;
+
+    return restoreSetSectionOverride;
 }
 
 let originalSetMainSection: ((section: string, ...args: any[]) => any) | null = null;
@@ -381,8 +569,9 @@ const overrideSetMainSection = (appui: any): (() => void) => {
     return restoreSetMainSectionOverride;
 }
 
-const injectRequiredStyles = (): void => {
+const injectRequiredStyles = (): Cleanup => {
     const style = document.createElement('style');
+    style.id = UI_STYLE_ID;
     style.textContent = `
     .projectoption select {
       color: rgba(0,0,0, .8)
@@ -402,6 +591,7 @@ const injectRequiredStyles = (): void => {
     }
         `;
     document.head.appendChild(style);
+    return () => style.remove();
 }
 
 const normalizePathname = (pathname: string): string => {
@@ -413,6 +603,56 @@ const normalizePathname = (pathname: string): string => {
 const isProjectsRoute = (): boolean => normalizePathname(window.location.pathname) === '/projects/';
 
 /**
+ * Install the header resize animation and return a cleanup that restores it.
+ */
+const setupHeaderResizeAnimation = (): Cleanup => {
+    const header = document.getElementsByTagName('header')[0];
+    if (!(header instanceof HTMLElement)) {
+        return NOOP_CLEANUP;
+    }
+
+    headerElement = header;
+    const style = window.getComputedStyle(header);
+    headerTransitionProperty = style.getPropertyValue('transition-property');
+    headerTransitionDuration = style.getPropertyValue('transition-duration');
+
+    header.style.transitionProperty = `${headerTransitionProperty}, top`;
+    header.style.transitionDuration = `${headerTransitionDuration}, 0.5s`;
+
+    headerTransitionEndHandler = (event: TransitionEvent): void => {
+        if (event.propertyName === 'top') {
+            window.dispatchEvent(new Event('resize'));
+        }
+    };
+    headerTransitionStartHandler = (event: TransitionEvent): void => {
+        if (event.propertyName === 'top') {
+            window.dispatchEvent(new Event('resize'));
+        }
+    };
+
+    header.addEventListener('transitionend', headerTransitionEndHandler);
+    header.addEventListener('transitionstart', headerTransitionStartHandler);
+
+    return () => {
+        if (headerTransitionEndHandler) {
+            header.removeEventListener('transitionend', headerTransitionEndHandler);
+        }
+        if (headerTransitionStartHandler) {
+            header.removeEventListener('transitionstart', headerTransitionStartHandler);
+        }
+
+        header.style.transitionProperty = headerTransitionProperty;
+        header.style.transitionDuration = headerTransitionDuration;
+
+        headerElement = null;
+        headerTransitionProperty = '';
+        headerTransitionDuration = '';
+        headerTransitionEndHandler = null;
+        headerTransitionStartHandler = null;
+    };
+};
+
+/**
  * Initialize the injected UI extensions and the initial-index lifecycle.
  */
 export const initializeAppExtension = async (): Promise<() => void> => {
@@ -422,70 +662,69 @@ export const initializeAppExtension = async (): Promise<() => void> => {
     // Install lifecycle events before any navigation hook can trigger a request.
     await startInitialIndexEventListening();
 
-    // -------------------------------------------
-    // step 1: remove
-    // -------------------------------------------
-    removeElements();
+    try {
+        // -------------------------------------------
+        // step 1: remove
+        // -------------------------------------------
+        removeElements();
 
-    // -------------------------------------------
-    // step 2: add
-    // -------------------------------------------
-    // more space icon
-    const projectIcon = document.getElementById('project-icon');
-    if (!document.getElementById('project-morespace') && projectIcon instanceof HTMLElement) {
-        const icon = document.createElement("i");
-        icon.setAttribute('class', 'fas fa-expand-arrows-alt');
-        icon.setAttribute('id', 'project-morespace');
-        icon.setAttribute('title', 'Toggle More Space');
-        icon.onclick = () => {
-            toggle_morespace();
+        // -------------------------------------------
+        // step 2: add
+        // -------------------------------------------
+        // more space icon
+        const projectIcon = document.getElementById('project-icon');
+        if (!document.getElementById('project-morespace') && projectIcon instanceof HTMLElement) {
+            const icon = document.createElement("i");
+            icon.setAttribute('class', 'fas fa-expand-arrows-alt');
+            icon.setAttribute('id', 'project-morespace');
+            icon.setAttribute('title', 'Toggle More Space');
+            icon.onclick = () => {
+                toggle_morespace();
+            }
+
+            projectIcon.after(icon);
+            morespace_icon = icon;
+            createdMoreSpaceIcon = true;
         }
 
-        projectIcon.after(icon);
-        morespace_icon = icon;
-        createdMoreSpaceIcon = true;
-    }
+        // -------------------------------------------
+        // step 3: insert
+        // -------------------------------------------
+        // resize animation on header
+        registerElement('header-resize', 'header', setupHeaderResizeAnimation());
 
-    // -------------------------------------------
-    // step 3: inseart
-    // -------------------------------------------
-    // risize animation on header
-    elm = document.getElementsByTagName('header')[0];
-    const style = window.getComputedStyle(elm);
-    let prop = style.getPropertyValue('transition-property');
-    elm.style.transitionProperty = prop + ', top';
-    prop = style.getPropertyValue('transition-duration');
-    elm.style.transitionDuration = prop + ', 0.5s';
+        // --------------------------------------------------------------------
+        // step 4: agent window and process
+        // --------------------------------------------------------------------
+        registerElement('uiex-styles', `#${UI_STYLE_ID}`, injectRequiredStyles());
 
-    // resize runtime vertical split
-    elm.ontransitionend = () => {
-        window.dispatchEvent(new Event('resize'));
-    }
-    elm.ontransitionstart = () => {
-        window.dispatchEvent(new Event('resize'));
-    }
+        const targetAppUi = (window as any).app?.appui;
+        registerElement('agent-menu-item', '#menuitem-agent', injectAgentMenuItem(targetAppUi));
+        registerElement('set-section-override', 'appui.setSection', overrideSetSection(targetAppUi));
+        registerElement(
+            'fullscreen-override',
+            '#project-fullscreen',
+            overrideCreateFullscreenFeatures(targetAppUi)
+        );
+        registerElement('agent-chat-window', '#agent-chat-window', setupAgentChatWindow());
+        registerElement('project-loaded-override', 'app.openProject', overrideProjectLoaded());
 
-    // --------------------------------------------------------------------
-    // step 4: agent window and process
-    // --------------------------------------------------------------------
-    injectRequiredStyles();
+        if (targetAppUi && typeof targetAppUi.setMainSection === 'function') {
+            registerElement(
+                'set-main-section-override',
+                'appui.setMainSection',
+                overrideSetMainSection(targetAppUi)
+            );
+        }
 
-    const targetAppUi = (window as any).app?.appui;
-    injectAgentMenuItem(targetAppUi);
-    overrideSetSection(targetAppUi);
-    overrideCreateFullscreenFeatures(targetAppUi);
-
-    setupAgentChatWindow();
-
-    overrideProjectLoaded();
-
-    let restoreSetMainSection: (() => void) | null = null;
-    if (targetAppUi && typeof targetAppUi.setMainSection === 'function') {
-        restoreSetMainSection = overrideSetMainSection(targetAppUi);
-    }
-
-    if (isProjectsRoute()) {
-        void requestInitialIndexForProjectsRoute();
+        if (isProjectsRoute()) {
+            void requestInitialIndexForProjectsRoute();
+        }
+    } catch (error) {
+        // Drain any partial registrations so a failed init leaves no stale state.
+        cleanupRegistrations();
+        cleanupInitialIndexLifecycle();
+        throw error;
     }
 
     const cleanup = (): void => {
@@ -493,7 +732,8 @@ export const initializeAppExtension = async (): Promise<() => void> => {
             return;
         }
 
-        restoreSetMainSection?.();
+        // Restore overrides and remove injected elements in reverse order.
+        cleanupRegistrations();
         cleanupInitialIndexLifecycle();
 
         if (createdMoreSpaceIcon && morespace_icon?.isConnected) {
@@ -502,11 +742,10 @@ export const initializeAppExtension = async (): Promise<() => void> => {
         if (morespace_icon) {
             morespace_icon.onclick = null;
         }
-        if (createdMoreSpaceIcon) {
-            flag_morespace = false;
-        }
         createdMoreSpaceIcon = false;
         morespace_icon = null;
+        flag_morespace = false;
+        cachedCodeEditor = null;
         initializeAppExtensionCleanup = null;
     };
 
