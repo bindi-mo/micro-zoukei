@@ -3,8 +3,10 @@
  * Handles all command invocations via the local proxy server
  */
 
-import type { EnsureInitialIndexResponse, LogLevel } from '../types/injected';
-import type { FileEntry, MicroZoukeiAPI, ProjectFileItem, SyncFilesResponse } from '../types/injected';
+import type {
+    EnsureInitialIndexResponse, FileEntry, LogLevel,
+    MicroZoukeiAPI, ProjectFileItem, SyncFilesResponse
+} from '../types/injected';
 
 const COMMAND_MAP: Record<string, string> = {
     listFiles: 'mzd_list_files',
