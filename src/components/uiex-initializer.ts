@@ -1,4 +1,5 @@
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { NOOP_CLEANUP, type Cleanup } from '../types/cleanup';
 import { setupAgentChatWindow } from './agent-window';
 import {
     cleanupInitialIndexLifecycle,
@@ -7,31 +8,15 @@ import {
 } from './initial-index';
 import { overrideProjectLoaded } from './project-files';
 
-type Cleanup = () => void;
-
 interface ElementRegistration {
     id: string;
-    selector: string;
     cleanup: Cleanup;
-}
-
-interface RemovedElementSnapshot {
-    id: string;
-    selector: string;
-    element: Element;
-    parent: Element;
-    nextSibling: Node | null;
-    attributes: Record<string, string>;
-    inlineStyleText: string;
-    computedStyleText: string;
 }
 
 const UI_STYLE_ID = 'micro-zoukei-uiex-styles';
 const FULLSCREEN_CLONE_ATTRIBUTE = 'data-micro-zoukei-fullscreen-clone';
-const NOOP_CLEANUP: Cleanup = () => undefined;
 
 const registrations = new Map<string, ElementRegistration>();
-const removedElementSnapshots = new Map<string, RemovedElementSnapshot>();
 
 let flag_morespace = false;
 let morespace_icon: HTMLElement | null = null;
@@ -39,17 +24,6 @@ let cachedCodeEditor: HTMLElement | null = null;
 let createdMoreSpaceIcon = false;
 let initializeAppExtensionCleanup: Cleanup | null = null;
 let initializationGeneration = 0;
-let fullscreenClone: HTMLElement | null = null;
-let fullscreenClickHandler: ((event: MouseEvent) => void) | null = null;
-let fullscreenChangeListener: (() => void) | null = null;
-let wrappedCreateFullscreenFeatures: (() => void) | null = null;
-let originalSetSection: ((section: string, useraction: boolean) => any) | null = null;
-let wrappedSetSection: ((section: string, useraction: boolean) => any) | null = null;
-let headerElement: HTMLElement | null = null;
-let headerTransitionProperty = '';
-let headerTransitionDuration = '';
-let headerTransitionEndHandler: ((this: HTMLElement, event: TransitionEvent) => void) | null = null;
-let headerTransitionStartHandler: ((this: HTMLElement, event: TransitionEvent) => void) | null = null;
 
 const runCleanup = (id: string): void => {
     const registration = registrations.get(id);
@@ -63,69 +37,14 @@ const runCleanup = (id: string): void => {
     }
 };
 
-const registerElement = (id: string, selector: string, cleanup: Cleanup): void => {
+const registerElement = (id: string, cleanup: Cleanup): void => {
     runCleanup(id);
-    registrations.set(id, { id, selector, cleanup });
+    registrations.set(id, { id, cleanup });
 };
 
 const cleanupRegistrations = (): void => {
     for (const registration of [...registrations.values()].reverse()) {
         runCleanup(registration.id);
-    }
-};
-
-const captureElementSnapshot = (
-    id: string,
-    selector: string,
-    element: Element
-): RemovedElementSnapshot => {
-    if (!(element.parentNode instanceof Element)) {
-        throw new Error(`Cannot snapshot ${selector}: its parent is not an Element`);
-    }
-
-    const attributes: Record<string, string> = {};
-    for (const attribute of Array.from(element.attributes)) {
-        attributes[attribute.name] = attribute.value;
-    }
-
-    const snapshot: RemovedElementSnapshot = {
-        id,
-        selector,
-        element,
-        parent: element.parentNode,
-        nextSibling: element.nextSibling,
-        attributes,
-        inlineStyleText: element.getAttribute('style') ?? '',
-        computedStyleText: window.getComputedStyle(element).cssText,
-    };
-    removedElementSnapshots.set(id, snapshot);
-    return snapshot;
-};
-
-const restoreRemovedElement = (id: string): void => {
-    const snapshot = removedElementSnapshots.get(id);
-    if (!snapshot) return;
-
-    removedElementSnapshots.delete(id);
-    const { element, parent, nextSibling, selector, attributes } = snapshot;
-
-    const current = parent.querySelector(selector);
-    if (current && current !== element) {
-        current.remove();
-    }
-
-    for (const attribute of Array.from(element.attributes)) {
-        if (!(attribute.name in attributes)) {
-            element.removeAttribute(attribute.name);
-        }
-    }
-    for (const [name, value] of Object.entries(attributes)) {
-        element.setAttribute(name, value);
-    }
-
-    if (!element.isConnected) {
-        const reference = nextSibling?.parentNode === parent ? nextSibling : null;
-        parent.insertBefore(element, reference);
     }
 };
 
@@ -235,7 +154,8 @@ const toggle_morespace = (): void => {
 const injectAgentMenuItem = (appui: any): Cleanup => {
     const ulElement = document.querySelector<HTMLUListElement>('#sidemenu ul');
     if (!ulElement) {
-        throw new Error('The specified `ul` element was not found.');
+        console.error('The specified `ul` element was not found.');
+        return NOOP_CLEANUP;
     }
 
     const existingMenuItem = document.getElementById('menuitem-agent');
@@ -274,27 +194,13 @@ const injectAgentMenuItem = (appui: any): Cleanup => {
 // --------------------------------------------------------------------
 // Deleting (or Hiding) Unnecessary Existing Elements
 // --------------------------------------------------------------------
-const removeElement = (id: string, selector: string): void => {
-    const element = document.querySelector(selector);
-    if (!element) {
-        registerElement(id, selector, NOOP_CLEANUP);
-        return;
-    }
-
-    registerElement(id, selector, NOOP_CLEANUP);
-    element.remove();
+const removeElement = (selector: string): void => {
+    document.querySelector(selector)?.remove();
 };
 
 const removeElements = (): void => {
-    removeElement(
-        'discord-link',
-        'a[href="https://discord.com/invite/BDMqjxd"][target="_blank"]'
-    );
-
-    removeElement(
-        'community-link',
-        'a[href="/community/"][target="_blank"]'
-    );
+    removeElement('a[href="https://discord.com/invite/BDMqjxd"][target="_blank"]');
+    removeElement('a[href="/community/"][target="_blank"]');
 };
 
 const overrideCreateFullscreenFeatures = (appui: any): Cleanup => {
@@ -305,9 +211,10 @@ const overrideCreateFullscreenFeatures = (appui: any): Cleanup => {
 
     const appWindow = getCurrentWebviewWindow();
     const originalCreateFullscreenFeatures = appui.createFullscreenFeatures;
+    let clone: HTMLElement | null = null;
 
-    fullscreenClickHandler = async (): Promise<void> => {
-        const activeClone = fullscreenClone;
+    const clickHandler = async (): Promise<void> => {
+        const activeClone = clone;
         if (!activeClone) return;
 
         try {
@@ -337,8 +244,8 @@ const overrideCreateFullscreenFeatures = (appui: any): Cleanup => {
         }
     };
 
-    fullscreenChangeListener = (): void => {
-        const activeClone = fullscreenClone;
+    const changeListener = (): void => {
+        const activeClone = clone;
         const projectview = document.getElementById("projectview");
         if (!activeClone || !projectview) return;
 
@@ -360,28 +267,19 @@ const overrideCreateFullscreenFeatures = (appui: any): Cleanup => {
             return;
         }
 
-        // Snapshot the original button so cleanup can restore it exactly.
-        captureElementSnapshot('fullscreen-button', '#project-fullscreen', button);
-
         // Clone the button so the existing microStudio listener is removed and
         // replaced with a listener that uses the Tauri fullscreen API.
         const newButton = button.cloneNode(true) as HTMLElement;
         newButton.setAttribute(FULLSCREEN_CLONE_ATTRIBUTE, 'true');
         button.parentNode?.replaceChild(newButton, button);
-        fullscreenClone = newButton;
-
-        const clickHandler = fullscreenClickHandler;
-        const changeListener = fullscreenChangeListener;
-        if (!clickHandler || !changeListener) {
-            return;
-        }
+        clone = newButton;
 
         newButton.addEventListener('click', clickHandler);
         window.addEventListener('fullscreenchange', changeListener);
     };
 
     // Override the instance method itself directly so that it will work properly when called in the future.
-    wrappedCreateFullscreenFeatures = function () {
+    const wrappedCreateFullscreenFeatures = (): void => {
         setupTauriFullscreen();
     };
     appui.createFullscreenFeatures = wrappedCreateFullscreenFeatures;
@@ -390,94 +288,52 @@ const overrideCreateFullscreenFeatures = (appui: any): Cleanup => {
     setupTauriFullscreen();
 
     return () => {
-        const clone = fullscreenClone;
-        if (clone) {
-            if (fullscreenClickHandler) {
-                clone.removeEventListener('click', fullscreenClickHandler);
-            }
-            if (fullscreenChangeListener) {
-                window.removeEventListener('fullscreenchange', fullscreenChangeListener);
-            }
+        const activeClone = clone;
+        if (activeClone) {
+            activeClone.removeEventListener('click', clickHandler);
+            window.removeEventListener('fullscreenchange', changeListener);
+            activeClone.removeAttribute(FULLSCREEN_CLONE_ATTRIBUTE);
         }
-
-        // Restore the original button (removes the clone via the snapshot selector).
-        restoreRemovedElement('fullscreen-button');
 
         // Only restore the method if it is still our wrapper.
         if (appui.createFullscreenFeatures === wrappedCreateFullscreenFeatures) {
             appui.createFullscreenFeatures = originalCreateFullscreenFeatures;
         }
 
-        fullscreenClone = null;
-        fullscreenClickHandler = null;
-        fullscreenChangeListener = null;
-        wrappedCreateFullscreenFeatures = null;
+        clone = null;
     };
 };
 
-const restoreSetSectionOverride = (): void => {
-    const appui = (window as any).app?.appui;
-
-    // Re-insert the cached editor before restoring the original method.
-    const codeSection = document.getElementById('code-section');
-    const chatWindow = document.getElementById('agent-chat-window');
-    if (cachedCodeEditor && codeSection) {
-        codeSection.insertBefore(cachedCodeEditor, chatWindow);
-    }
-    cachedCodeEditor = null;
-
-    if (appui?.setSection === wrappedSetSection && originalSetSection) {
-        appui.setSection = originalSetSection;
-    }
-
-    originalSetSection = null;
-    wrappedSetSection = null;
-};
-
 const overrideSetSection = (appui: any): Cleanup => {
-
     if (!appui || typeof appui.setSection !== 'function') {
         console.error('Not found appui.setSection function');
         return NOOP_CLEANUP;
     }
 
-    if (appui.setSection === wrappedSetSection) {
-        return restoreSetSectionOverride;
-    }
-
-    // Copy the original function and save it
     const originalSetSectionRef = appui.setSection;
-
-    // Override a function
     const wrappedSetSectionRef = function (this: any, section: string, useraction: boolean) {
-        // Declare a variable (the section name to be passed to
-        // the original function)
         let targetSection = section;
 
         // ----------------------------------------------------
         // [Interrupt Handling] If "agent" is selected
         // ----------------------------------------------------
-        if (section === "agent") {
+        if (section === 'agent') {
             // Fake the original function into thinking "code" was selected and
             // execute it. This causes the #code-section to appear, and all of
             // microStudio's complex resizing processes will run normally.
-            targetSection = "code";
+            targetSection = 'code';
         }
 
         // Execute the original function that was set aside
         const result = originalSetSectionRef.apply(this, [targetSection, useraction]);
 
-        // ----------------------------------------------------
-        // [Interrupt Handling] Fine-Tuning (Balancing the Books)
-        // after the Original Code Runs
-        // ----------------------------------------------------
         const codeSection = document.getElementById('code-section');
         const codeEditor = document.getElementById('code-editor');
         const chatWindow = document.getElementById('agent-chat-window');
         const agentMenu = document.getElementById('menuitem-agent');
         const codeMenu = document.getElementById('menuitem-code');
 
-        if (section === "agent") {
+        if (section === 'agent') {
             if (chatWindow) {
                 window.dispatchEvent(new Event('resize'));
                 chatWindow.style.display = 'block';
@@ -486,7 +342,7 @@ const overrideSetSection = (appui: any): Cleanup => {
             if (codeEditor && codeSection) {
                 cachedCodeEditor = codeEditor;
                 codeEditor.remove();
-                console.log("Moved the editor off the screen.");
+                console.log('Moved the editor off the screen.');
             }
 
             // Adjusting the Appearance of the Menu Button
@@ -512,65 +368,55 @@ const overrideSetSection = (appui: any): Cleanup => {
                 // Revert to the original editor before the chat window.
                 codeSection.insertBefore(cachedCodeEditor, chatWindow);
                 cachedCodeEditor = null;
-                console.log("The editor has been restored to the screen.");
+                console.log('The editor has been restored to the screen.');
             }
-
-            return result;
-        };
+        }
 
         console.log('Successfully hijacked and extended setSection.');
+        return result;
     };
 
-    originalSetSection = originalSetSectionRef;
-    wrappedSetSection = wrappedSetSectionRef;
     appui.setSection = wrappedSetSectionRef;
 
-    return restoreSetSectionOverride;
-}
+    return () => {
+        const codeSection = document.getElementById('code-section');
+        const chatWindow = document.getElementById('agent-chat-window');
+        if (cachedCodeEditor && codeSection) {
+            codeSection.insertBefore(cachedCodeEditor, chatWindow);
+        }
+        cachedCodeEditor = null;
 
-let originalSetMainSection: ((section: string, ...args: any[]) => any) | null = null;
-let wrappedSetMainSection: ((section: string, ...args: any[]) => any) | null = null;
-
-const restoreSetMainSectionOverride = (): void => {
-    const appui = (window as any).app?.appui;
-    if (
-        appui?.setMainSection === wrappedSetMainSection &&
-        originalSetMainSection
-    ) {
-        appui.setMainSection = originalSetMainSection;
-    }
-
-    originalSetMainSection = null;
-    wrappedSetMainSection = null;
+        if (appui.setSection === wrappedSetSectionRef) {
+            appui.setSection = originalSetSectionRef;
+        }
+    };
 };
 
-const overrideSetMainSection = (appui: any): (() => void) => {
+const overrideSetMainSection = (appui: any): Cleanup => {
     if (!appui || typeof appui.setMainSection !== 'function') {
         console.error('Not found appui.setMainSection function');
-        return () => undefined;
-    }
-
-    if (appui.setMainSection === wrappedSetMainSection) {
-        return restoreSetMainSectionOverride;
+        return NOOP_CLEANUP;
     }
 
     const originalSetMainSectionRef = appui.setMainSection;
     const wrappedSetMainSectionRef = function (this: any, section: string, ...args: any[]) {
         const result = originalSetMainSectionRef.apply(this, [section, ...args]);
 
-        if (section === "projects") {
+        if (section === 'projects') {
             void requestInitialIndexForProjectsRoute();
         }
 
         return result;
     };
 
-    originalSetMainSection = originalSetMainSectionRef;
-    wrappedSetMainSection = wrappedSetMainSectionRef;
     appui.setMainSection = wrappedSetMainSectionRef;
 
-    return restoreSetMainSectionOverride;
-}
+    return () => {
+        if (appui.setMainSection === wrappedSetMainSectionRef) {
+            appui.setMainSection = originalSetMainSectionRef;
+        }
+    };
+};
 
 const injectRequiredStyles = (): Cleanup => {
     const style = document.createElement('style');
@@ -640,58 +486,69 @@ const setupHeaderResizeAnimation = (): Cleanup => {
         return NOOP_CLEANUP;
     }
 
-    headerElement = header;
-    const style = window.getComputedStyle(header);
-    headerTransitionProperty = style.getPropertyValue('transition-property');
-    headerTransitionDuration = style.getPropertyValue('transition-duration');
+    const originalTransitionProperty = header.style.transitionProperty;
+    const originalTransitionDuration = header.style.transitionDuration;
+    const transitionProperty = originalTransitionProperty
+        ? `${originalTransitionProperty}, top`
+        : 'top';
+    const transitionDuration = originalTransitionDuration
+        ? `${originalTransitionDuration}, 0.5s`
+        : '0.5s';
 
-    header.style.transitionProperty = `${headerTransitionProperty}, top`;
-    header.style.transitionDuration = `${headerTransitionDuration}, 0.5s`;
-
-    headerTransitionEndHandler = (event: TransitionEvent): void => {
+    const transitionEndHandler = (event: TransitionEvent): void => {
         if (event.propertyName === 'top') {
             window.dispatchEvent(new Event('resize'));
         }
     };
-    headerTransitionStartHandler = (event: TransitionEvent): void => {
+    const transitionStartHandler = (event: TransitionEvent): void => {
         if (event.propertyName === 'top') {
             window.dispatchEvent(new Event('resize'));
         }
     };
 
-    header.addEventListener('transitionend', headerTransitionEndHandler);
-    header.addEventListener('transitionstart', headerTransitionStartHandler);
+    header.style.transitionProperty = transitionProperty;
+    header.style.transitionDuration = transitionDuration;
+    header.addEventListener('transitionend', transitionEndHandler);
+    header.addEventListener('transitionstart', transitionStartHandler);
 
     return () => {
-        if (headerTransitionEndHandler) {
-            header.removeEventListener('transitionend', headerTransitionEndHandler);
-        }
-        if (headerTransitionStartHandler) {
-            header.removeEventListener('transitionstart', headerTransitionStartHandler);
-        }
-
-        header.style.transitionProperty = headerTransitionProperty;
-        header.style.transitionDuration = headerTransitionDuration;
-
-        headerElement = null;
-        headerTransitionProperty = '';
-        headerTransitionDuration = '';
-        headerTransitionEndHandler = null;
-        headerTransitionStartHandler = null;
+        header.removeEventListener('transitionend', transitionEndHandler);
+        header.removeEventListener('transitionstart', transitionStartHandler);
+        header.style.transitionProperty = originalTransitionProperty;
+        header.style.transitionDuration = originalTransitionDuration;
     };
+};
+
+/**
+ * Remove UI state owned by the initializer without changing More Space state.
+ */
+const resetModuleState = (): void => {
+    const moreSpaceIcon = document.getElementById('project-morespace');
+    if (moreSpaceIcon?.isConnected) {
+        moreSpaceIcon.remove();
+    }
+    if (morespace_icon) {
+        morespace_icon.onclick = null;
+    }
+    createdMoreSpaceIcon = false;
+    morespace_icon = null;
+    cachedCodeEditor = null;
 };
 
 /**
  * Initialize the injected UI extensions and the initial-index lifecycle.
  */
-export const initializeAppExtension = async (): Promise<() => void> => {
+export const initializeAppExtension = async (): Promise<Cleanup> => {
     initializeAppExtensionCleanup?.();
     const generation = ++initializationGeneration;
 
-    // Install lifecycle events before any navigation hook can trigger a request.
-    await startInitialIndexEventListening();
-
     try {
+        // Install lifecycle events before any navigation hook can trigger a request.
+        await startInitialIndexEventListening();
+        if (generation !== initializationGeneration) {
+            return NOOP_CLEANUP;
+        }
+
         // -------------------------------------------
         // step 1: remove
         // -------------------------------------------
@@ -720,28 +577,26 @@ export const initializeAppExtension = async (): Promise<() => void> => {
         // step 3: insert
         // -------------------------------------------
         // resize animation on header
-        registerElement('header-resize', 'header', setupHeaderResizeAnimation());
+        registerElement('header-resize', setupHeaderResizeAnimation());
 
         // --------------------------------------------------------------------
         // step 4: agent window and process
         // --------------------------------------------------------------------
-        registerElement('uiex-styles', `#${UI_STYLE_ID}`, injectRequiredStyles());
+        registerElement('uiex-styles', injectRequiredStyles());
 
         const targetAppUi = (window as any).app?.appui;
-        registerElement('agent-menu-item', '#menuitem-agent', injectAgentMenuItem(targetAppUi));
-        registerElement('set-section-override', 'appui.setSection', overrideSetSection(targetAppUi));
+        registerElement('agent-menu-item', injectAgentMenuItem(targetAppUi));
+        registerElement('set-section-override', overrideSetSection(targetAppUi));
         registerElement(
             'fullscreen-override',
-            '#project-fullscreen',
             overrideCreateFullscreenFeatures(targetAppUi)
         );
-        registerElement('agent-chat-window', '#agent-chat-window', setupAgentChatWindow());
-        registerElement('project-loaded-override', 'app.openProject', overrideProjectLoaded());
+        registerElement('agent-chat-window', setupAgentChatWindow());
+        registerElement('project-loaded-override', overrideProjectLoaded());
 
         if (targetAppUi && typeof targetAppUi.setMainSection === 'function') {
             registerElement(
                 'set-main-section-override',
-                'appui.setMainSection',
                 overrideSetMainSection(targetAppUi)
             );
         }
@@ -776,8 +631,11 @@ export const initializeAppExtension = async (): Promise<() => void> => {
         }
     } catch (error) {
         // Drain any partial registrations so a failed init leaves no stale state.
-        cleanupRegistrations();
-        cleanupInitialIndexLifecycle();
+        if (generation === initializationGeneration) {
+            cleanupRegistrations();
+            cleanupInitialIndexLifecycle();
+            resetModuleState();
+        }
         throw error;
     }
 
@@ -794,20 +652,12 @@ export const initializeAppExtension = async (): Promise<() => void> => {
         // Restore overrides and remove injected elements in reverse order.
         cleanupRegistrations();
         cleanupInitialIndexLifecycle();
-
-        if (createdMoreSpaceIcon && morespace_icon?.isConnected) {
-            morespace_icon.remove();
-        }
-        if (morespace_icon) {
-            morespace_icon.onclick = null;
-        }
-        createdMoreSpaceIcon = false;
-        morespace_icon = null;
-        flag_morespace = false;
-        cachedCodeEditor = null;
+        resetModuleState();
         initializeAppExtensionCleanup = null;
     };
 
-    initializeAppExtensionCleanup = cleanup;
+    if (generation === initializationGeneration) {
+        initializeAppExtensionCleanup = cleanup;
+    }
     return cleanup;
-}
+};

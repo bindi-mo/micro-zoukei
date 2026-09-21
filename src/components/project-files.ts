@@ -1,4 +1,4 @@
-// project-files.ts
+import { NOOP_CLEANUP, type Cleanup } from '../types/cleanup';
 import type { ProjectFileItem } from '../types/injected';
 import { rpcBridge } from './rpc-bridge';
 
@@ -214,10 +214,6 @@ const isProjectDataReady = (project: any): boolean => {
  */
 // Add a flag outside the function (in the module scope)
 let isProjectAlreadySaved = false;
-
-type Cleanup = () => void;
-
-const NOOP_CLEANUP: Cleanup = () => undefined;
 
 export const overrideProjectLoaded = (): Cleanup => {
     const mainApp = (window as any).app;

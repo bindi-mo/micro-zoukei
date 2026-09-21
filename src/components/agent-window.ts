@@ -1,8 +1,8 @@
-// ============================================================================
-// type definition (Types)
-// ============================================================================
+import { NOOP_CLEANUP, type Cleanup } from '../types/cleanup';
 
-type Cleanup = () => void;
+// ============================================================================
+// Public functions (to be called from external files like main.ts)
+// ============================================================================
 
 export interface ChatMessage {
     sender: 'user' | 'agent';
@@ -122,11 +122,11 @@ export const setupAgentChatWindow = (): Cleanup => {
     const codeSection = document.getElementById('code-section');
     if (!codeSection) {
         console.error('The chat screen could not be initialized because #code-section could not be found.');
-        return () => undefined;
+        return NOOP_CLEANUP;
     }
 
     // If it already exists, do nothing (prevent duplicate creation).
-    if (document.getElementById('agent-chat-window')) return () => undefined;
+    if (document.getElementById('agent-chat-window')) return NOOP_CLEANUP;
 
     // Generate the base for the chat window.
     const chatWindow = document.createElement('div');
