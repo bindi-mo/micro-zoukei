@@ -6,6 +6,13 @@ declare global {
     interface Window {
         microZoukei?: MicroZoukeiAPI;
         microZoukeiInjectedState?: MicroZoukeiInjectedState;
+        /**
+         * Stashed logical section name persisted across injected-script
+         * re-injections so the previously active section can be restored.
+         * Set by `captureActiveSectionForReinjection` and consumed by
+         * `initializeAppExtension`.
+         */
+        __microZoukeiRestoreSection?: string | null;
     }
 }
 

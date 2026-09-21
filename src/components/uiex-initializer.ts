@@ -603,6 +603,32 @@ const normalizePathname = (pathname: string): string => {
 const isProjectsRoute = (): boolean => normalizePathname(window.location.pathname) === '/projects/';
 
 /**
+ * Key under which the active logical section is stashed on `window` between
+ * injected-script re-injections. Module scope is reset by `eval`, so the value
+ * must be persisted on the global object.
+ */
+const RESTORE_SECTION_KEY = '__microZoukeiRestoreSection';
+
+/**
+ * Snapshot the currently active logical section before teardown.
+ *
+ * microStudio's `AppUI.setSection` is wrapped so that selecting the agent
+ * section fakes `'code'` internally; `appui.current_section` therefore cannot
+ * be used for detection. Instead, the inline display state of
+ * `#agent-chat-window` is used as a proxy: it is set to `'block'` only while
+ * the agent section is active.
+ */
+const captureActiveSectionForReinjection = (): void => {
+    const chatWindow = document.getElementById('agent-chat-window');
+    const section =
+        chatWindow instanceof HTMLElement && chatWindow.style.display !== 'none'
+            ? 'agent'
+            : null;
+
+    (window as unknown as Record<string, string | null>)[RESTORE_SECTION_KEY] = section;
+};
+
+/**
  * Install the header resize animation and return a cleanup that restores it.
  */
 const setupHeaderResizeAnimation = (): Cleanup => {
@@ -720,6 +746,31 @@ export const initializeAppExtension = async (): Promise<() => void> => {
         if (isProjectsRoute()) {
             void requestInitialIndexForProjectsRoute();
         }
+
+        // -------------------------------------------------------------
+        // step 5: restore the previously active section (re-injection only)
+        // -------------------------------------------------------------
+        // Read and consume the stashed section BEFORE the new script's
+        // overrides replace the old ones. Single attempt: no polling.
+        const restoreSection = (
+            window as unknown as Record<string, string | null>
+        )[RESTORE_SECTION_KEY] as string | null;
+        delete (window as unknown as Record<string, unknown>)[RESTORE_SECTION_KEY];
+
+        if (
+            restoreSection === 'agent' &&
+            targetAppUi &&
+            typeof targetAppUi.setSection === 'function'
+        ) {
+            try {
+                targetAppUi.setSection('agent', false);
+            } catch (error) {
+                console.error(
+                    '[MicroZoukei] Failed to restore the agent section after re-injection:',
+                    error
+                );
+            }
+        }
     } catch (error) {
         // Drain any partial registrations so a failed init leaves no stale state.
         cleanupRegistrations();
@@ -731,6 +782,11 @@ export const initializeAppExtension = async (): Promise<() => void> => {
         if (generation !== initializationGeneration) {
             return;
         }
+
+        // Stash the active section before teardown: `agent-chat-window` is
+        // removed by `cleanupRegistrations()` (reverse order), so capture it
+        // here while it is still present.
+        captureActiveSectionForReinjection();
 
         // Restore overrides and remove injected elements in reverse order.
         cleanupRegistrations();

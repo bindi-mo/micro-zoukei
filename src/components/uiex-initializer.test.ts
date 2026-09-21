@@ -24,6 +24,8 @@ interface MockAppUi {
     createFullscreenFeatures: () => void;
 }
 
+const RESTORE_SECTION_KEY = '__microZoukeiRestoreSection';
+
 const buildDom = (): void => {
     document.body.innerHTML = `
         <header></header>
@@ -59,7 +61,73 @@ describe('uiex-initializer lifecycle', () => {
     afterEach(() => {
         document.body.innerHTML = '';
         delete (window as any).app;
+        delete (window as any)[RESTORE_SECTION_KEY];
         vi.restoreAllMocks();
+    });
+
+    it('restores the agent section after a re-injection while the agent tab is active', async () => {
+        const appui = (window as any).app.appui as MockAppUi;
+        const originalSetSection = appui.setSection;
+
+        // First initialization: the agent tab is not yet active.
+        const firstCleanup = await initializeAppExtension();
+        expect(originalSetSection).not.toHaveBeenCalled();
+
+        // Simulate the agent tab being active: the chat window is visible.
+        const chatWindow = document.getElementById('agent-chat-window') as HTMLElement;
+        chatWindow.style.display = 'block';
+
+        // Simulate a re-injection: the old script's cleanup stashes the active
+        // section, then the new script initializes.
+        firstCleanup();
+        const secondCleanup = await initializeAppExtension();
+
+        // The wrapper translates `agent` -> `code` for microStudio, so the
+        // original setSection mock is called with ('code', false).
+        expect(originalSetSection).toHaveBeenCalledTimes(1);
+        expect(originalSetSection).toHaveBeenCalledWith('code', false);
+
+        secondCleanup();
+    });
+
+    it('does not call setSection after a re-injection while another tab is active', async () => {
+        const appui = (window as any).app.appui as MockAppUi;
+        const originalSetSection = appui.setSection;
+
+        // First initialization: the chat window is hidden by default.
+        const firstCleanup = await initializeAppExtension();
+
+        // Re-injection while a non-agent tab is active.
+        firstCleanup();
+        await initializeAppExtension();
+
+        expect(originalSetSection).not.toHaveBeenCalled();
+    });
+
+    it('does not call setSection on the very first initialization', async () => {
+        const appui = (window as any).app.appui as MockAppUi;
+        const originalSetSection = appui.setSection;
+
+        await initializeAppExtension();
+
+        expect(originalSetSection).not.toHaveBeenCalled();
+        expect((window as any)[RESTORE_SECTION_KEY]).toBeUndefined();
+    });
+
+    it('consumes (deletes) the stashed section key after initialization', async () => {
+        const appui = (window as any).app.appui as MockAppUi;
+        const originalSetSection = appui.setSection;
+
+        const firstCleanup = await initializeAppExtension();
+        const chatWindow = document.getElementById('agent-chat-window') as HTMLElement;
+        chatWindow.style.display = 'block';
+        firstCleanup();
+
+        expect((window as any)[RESTORE_SECTION_KEY]).toBe('agent');
+        await initializeAppExtension();
+
+        expect((window as any)[RESTORE_SECTION_KEY]).toBeUndefined();
+        expect(originalSetSection).toHaveBeenCalledTimes(1);
     });
 
     it('removes the Discord and Community links permanently', async () => {

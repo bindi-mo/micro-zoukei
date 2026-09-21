@@ -4079,6 +4079,12 @@ var InjectedScript = (function(exports) {
     return withLeadingSlash.endsWith("/") ? withLeadingSlash : `${withLeadingSlash}/`;
   };
   const isProjectsRoute = () => normalizePathname(window.location.pathname) === "/projects/";
+  const RESTORE_SECTION_KEY = "__microZoukeiRestoreSection";
+  const captureActiveSectionForReinjection = () => {
+    const chatWindow = document.getElementById("agent-chat-window");
+    const section = chatWindow instanceof HTMLElement && chatWindow.style.display !== "none" ? "agent" : null;
+    window[RESTORE_SECTION_KEY] = section;
+  };
   const setupHeaderResizeAnimation = () => {
     const header = document.getElementsByTagName("header")[0];
     if (!(header instanceof HTMLElement)) {
@@ -4157,6 +4163,18 @@ var InjectedScript = (function(exports) {
       if (isProjectsRoute()) {
         void requestInitialIndexForProjectsRoute();
       }
+      const restoreSection = window[RESTORE_SECTION_KEY];
+      delete window[RESTORE_SECTION_KEY];
+      if (restoreSection === "agent" && targetAppUi && typeof targetAppUi.setSection === "function") {
+        try {
+          targetAppUi.setSection("agent", false);
+        } catch (error) {
+          console.error(
+            "[MicroZoukei] Failed to restore the agent section after re-injection:",
+            error
+          );
+        }
+      }
     } catch (error) {
       cleanupRegistrations();
       cleanupInitialIndexLifecycle();
@@ -4166,6 +4184,7 @@ var InjectedScript = (function(exports) {
       if (generation !== initializationGeneration) {
         return;
       }
+      captureActiveSectionForReinjection();
       cleanupRegistrations();
       cleanupInitialIndexLifecycle();
       if (createdMoreSpaceIcon && morespace_icon?.isConnected) {
