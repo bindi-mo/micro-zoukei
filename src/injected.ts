@@ -102,7 +102,7 @@ const initializeInjectedScript = async (): Promise<void> => {
         }
 
         (window as unknown as { microZoukei?: MicroZoukeiAPI }).microZoukei = rpcBridge;
-        rpcBridge.logMessage('info', '[MicroZoukei] RPC Bridge initialized and ready');
+        rpcBridge.log.info('[MicroZoukei] RPC Bridge initialized and ready');
 
         await waitForMicroStudioLoad(token);
         if (token !== initializationToken) {

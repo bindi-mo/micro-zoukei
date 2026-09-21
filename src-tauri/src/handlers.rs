@@ -118,7 +118,11 @@ pub async fn handle_delete_file(path: String) -> Result<bool, String> {
 }
 
 pub async fn handle_log_message(level: String, message: String) -> Result<(), String> {
-    println!("{}", message);
+    let message = if message.len() >= 2 && message.starts_with('"') && message.ends_with('"') {
+        message[1..message.len() - 1].to_string()
+    } else {
+        message
+    };
     match level.as_str() {
         "debug" => log::debug!(target: "frontend", "{}", message),
         "info" => log::info!(target: "frontend", "{}", message),

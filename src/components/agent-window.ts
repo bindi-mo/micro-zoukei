@@ -1,4 +1,5 @@
 import { NOOP_CLEANUP, type Cleanup } from '../types/cleanup';
+import { rpcBridge } from './rpc-bridge';
 
 // ============================================================================
 // Public functions (to be called from external files like main.ts)
@@ -121,7 +122,7 @@ export const handleSendMessage = (): void => {
 export const setupAgentChatWindow = (): Cleanup => {
     const codeSection = document.getElementById('code-section');
     if (!codeSection) {
-        console.error('The chat screen could not be initialized because #code-section could not be found.');
+        rpcBridge.log.error('The chat screen could not be initialized because #code-section could not be found.');
         return NOOP_CLEANUP;
     }
 
@@ -172,7 +173,7 @@ export const setupAgentChatWindow = (): Cleanup => {
     const inputEl = chatWindow.querySelector('#chat-user-input');
     inputEl?.addEventListener('keydown', handleInputKeydown);
 
-    console.log('The UI for the Agent chat window is now ready.');
+    rpcBridge.log.debug('The UI for the Agent chat window is now ready.');
 
     return () => {
         window.removeEventListener('resize', updateWidth);
