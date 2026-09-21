@@ -478,7 +478,10 @@ const overrideSetSection = (appui: any): Cleanup => {
         const codeMenu = document.getElementById('menuitem-code');
 
         if (section === "agent") {
-            if (chatWindow) chatWindow.style.display = 'block';
+            if (chatWindow) {
+                window.dispatchEvent(new Event('resize'));
+                chatWindow.style.display = 'block';
+            }
 
             if (codeEditor && codeSection) {
                 cachedCodeEditor = codeEditor;
