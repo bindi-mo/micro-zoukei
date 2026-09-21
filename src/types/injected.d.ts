@@ -64,7 +64,12 @@ export interface MicroZoukeiAPI {
     syncFiles(title: string, files: ProjectFileItem[]): Promise<SyncFilesResponse>;
 
     /** Log a message to the backend */
-    logMessage(level: LogLevel, message: string): Promise<void>;
+    log: ((level: LogLevel, ...args: unknown[]) => Promise<void>) & {
+        debug(...args: unknown[]): Promise<void>;
+        info(...args: unknown[]): Promise<void>;
+        warn(...args: unknown[]): Promise<void>;
+        error(...args: unknown[]): Promise<void>;
+    };
 
     /** Check if the bridge is initialized */
     isReady(): boolean;

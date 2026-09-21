@@ -48,6 +48,36 @@ var InjectedScript = (function(exports) {
       clearTimeout(timeoutId);
     }
   }
+  function stringifyLogArg(value) {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (value === void 0) {
+      return "undefined";
+    }
+    if (value === null) {
+      return "null";
+    }
+    try {
+      if (typeof value === "object") {
+        return JSON.stringify(value) ?? String(value);
+      }
+      return String(value);
+    } catch {
+      return String(value);
+    }
+  }
+  async function log(level, ...args) {
+    const message = args.map(stringifyLogArg).join(" ");
+    await fetchCommand({
+      commandName: "mzd_log_message",
+      args: { level, message }
+    });
+  }
+  log.debug = (...args) => log("debug", ...args);
+  log.info = (...args) => log("info", ...args);
+  log.warn = (...args) => log("warn", ...args);
+  log.error = (...args) => log("error", ...args);
   const rpcBridge = {
     listFiles: async (path) => {
       return await fetchCommand({
@@ -79,12 +109,7 @@ var InjectedScript = (function(exports) {
         args: { title, files }
       });
     },
-    logMessage: async (level, message) => {
-      await fetchCommand({
-        commandName: "mzd_log_message",
-        args: { level, message }
-      });
-    },
+    log,
     ensureInitialIndex: async () => {
       return await fetchCommand({
         commandName: "mzd_ensure_initial_index"
@@ -156,7 +181,7 @@ var InjectedScript = (function(exports) {
       container.appendChild(errorDiv);
     }
     (async () => {
-      await rpcBridge.logMessage("error", `[MicroZoukei] Error: ${options.message}`);
+      await rpcBridge.log.error(`Error: ${options.message}`);
     })();
   }
   function hideAllErrors() {
@@ -550,9 +575,8 @@ var InjectedScript = (function(exports) {
         clearInitialIndexResponseTimeout();
         resolveActiveRequest();
         hideIndexModal();
-        void rpcBridge.logMessage(
-          "info",
-          `[MicroZoukei] Initial index completed with ${payload.documentCount ?? 0} documents`
+        void rpcBridge.log.info(
+          `Initial index completed with ${payload.documentCount ?? 0} documents`
         );
         break;
       case "failed": {
@@ -600,7 +624,7 @@ var InjectedScript = (function(exports) {
       }
       unlistenInitialIndexStatus = unlisten;
     }).catch((error) => {
-      console.error("[MicroZoukei] Failed to subscribe to initial index events:", error);
+      rpcBridge.log.error("Failed to subscribe to initial index events:", error);
       if (generation === listenerGeneration) {
         unlistenInitialIndexStatus = void 0;
       }
@@ -3404,7 +3428,7 @@ var InjectedScript = (function(exports) {
   const setupAgentChatWindow = () => {
     const codeSection = document.getElementById("code-section");
     if (!codeSection) {
-      console.error("The chat screen could not be initialized because #code-section could not be found.");
+      rpcBridge.log.error("The chat screen could not be initialized because #code-section could not be found.");
       return NOOP_CLEANUP;
     }
     if (document.getElementById("agent-chat-window")) return NOOP_CLEANUP;
@@ -3442,7 +3466,7 @@ var InjectedScript = (function(exports) {
     sendBtn?.addEventListener("click", handleSendClick);
     const inputEl = chatWindow.querySelector("#chat-user-input");
     inputEl?.addEventListener("keydown", handleInputKeydown);
-    console.log("The UI for the Agent chat window is now ready.");
+    rpcBridge.log.debug("The UI for the Agent chat window is now ready.");
     return () => {
       window.removeEventListener("resize", updateWidth);
       sendBtn?.removeEventListener("click", handleSendClick);
@@ -3491,12 +3515,12 @@ var InjectedScript = (function(exports) {
   };
   const saveAllFilesToLocal = async (title, lang, filelist) => {
     const processedFileList = convertFileExtensions(filelist, lang);
-    console.log("Saving files locally:", title, lang, processedFileList.length);
-    console.log(processedFileList);
+    rpcBridge.log.info("Saving files locally:", title, lang, processedFileList.length);
+    rpcBridge.log.info(processedFileList);
     if (processedFileList.length > 0) {
       await rpcBridge.syncFiles(title, processedFileList);
     } else {
-      console.log("not found files");
+      rpcBridge.log.info("not found files");
     }
   };
   const fetchAsBase64 = async (url) => {
@@ -3522,7 +3546,7 @@ var InjectedScript = (function(exports) {
         fileContent = await fetchAsBase64(item.url);
         isBinaryBase64 = true;
       } catch (e) {
-        console.error(`[Sync Fetch Error] ${item.url}:`, e);
+        rpcBridge.log.error(`[Sync Fetch Error] ${item.url}:`, e);
         return null;
       }
     }
@@ -3545,7 +3569,7 @@ var InjectedScript = (function(exports) {
   const getMicroStudioFileList = async () => {
     const project = window.app?.project;
     if (!project) {
-      console.error("There is no information about the project.");
+      rpcBridge.log.error("There is no information about the project.");
       return [];
     }
     if (!Array.isArray(project.file_types)) {
@@ -3592,7 +3616,7 @@ var InjectedScript = (function(exports) {
   const overrideProjectLoaded = () => {
     const mainApp = window.app;
     if (!mainApp || typeof mainApp.openProject !== "function") {
-      console.error("Not found window.app.openProject.");
+      rpcBridge.log.error("Not found window.app.openProject.");
       return NOOP_CLEANUP;
     }
     if (mainApp.openProject.__isOverridden) return NOOP_CLEANUP;
@@ -3631,7 +3655,7 @@ var InjectedScript = (function(exports) {
     };
     newOpenProject.__isOverridden = true;
     mainApp.openProject = newOpenProject;
-    console.log("The event hook for `window.app.openProject` has completed.");
+    rpcBridge.log.info("The event hook for `window.app.openProject` has completed.");
     return () => {
       cancelled = true;
       if (pendingTimer !== void 0) {
@@ -3661,7 +3685,7 @@ var InjectedScript = (function(exports) {
     try {
       registration.cleanup();
     } catch (error) {
-      console.error(`[MicroZoukei] Failed to clean up ${id}:`, error);
+      rpcBridge.log.error(`Failed to clean up ${id}:`, error);
     }
   };
   const registerElement = (id, cleanup) => {
@@ -3759,7 +3783,7 @@ var InjectedScript = (function(exports) {
   const injectAgentMenuItem = (appui) => {
     const ulElement = document.querySelector("#sidemenu ul");
     if (!ulElement) {
-      console.error("The specified `ul` element was not found.");
+      rpcBridge.log.error("The specified `ul` element was not found.");
       return NOOP_CLEANUP;
     }
     const existingMenuItem = document.getElementById("menuitem-agent");
@@ -3794,10 +3818,12 @@ var InjectedScript = (function(exports) {
   const removeElements = () => {
     removeElement('a[href="https://discord.com/invite/BDMqjxd"][target="_blank"]');
     removeElement('a[href="/community/"][target="_blank"]');
+    removeElement('div[id="qrcode-button"]');
+    removeElement('a[id="run-link"]');
   };
   const overrideCreateFullscreenFeatures = (appui) => {
     if (!appui || typeof appui.createFullscreenFeatures !== "function") {
-      console.error("Not found appui.createFullscreenFeatures function");
+      rpcBridge.log.error("Not found appui.createFullscreenFeatures function");
       return NOOP_CLEANUP;
     }
     const appWindow = getCurrentWebviewWindow();
@@ -3827,7 +3853,7 @@ var InjectedScript = (function(exports) {
           window.dispatchEvent(new Event("fullscreenchange"));
         }
       } catch (err) {
-        console.error("Tauri Fullscreen Error:", err);
+        rpcBridge.log.error("Tauri Fullscreen Error:", err);
       }
     };
     const changeListener = () => {
@@ -3876,7 +3902,7 @@ var InjectedScript = (function(exports) {
   };
   const overrideSetSection = (appui) => {
     if (!appui || typeof appui.setSection !== "function") {
-      console.error("Not found appui.setSection function");
+      rpcBridge.log.error("Not found appui.setSection function");
       return NOOP_CLEANUP;
     }
     const originalSetSectionRef = appui.setSection;
@@ -3899,7 +3925,7 @@ var InjectedScript = (function(exports) {
         if (codeEditor && codeSection) {
           cachedCodeEditor = codeEditor;
           codeEditor.remove();
-          console.log("Moved the editor off the screen.");
+          rpcBridge.log.debug("Moved the editor off the screen.");
         }
         codeMenu?.classList.remove("selected");
         agentMenu?.classList.add("selected");
@@ -3915,10 +3941,10 @@ var InjectedScript = (function(exports) {
         if (cachedCodeEditor && codeSection) {
           codeSection.insertBefore(cachedCodeEditor, chatWindow);
           cachedCodeEditor = null;
-          console.log("The editor has been restored to the screen.");
+          rpcBridge.log.info("The editor has been restored to the screen.");
         }
       }
-      console.log("Successfully hijacked and extended setSection.");
+      rpcBridge.log.info("Successfully hijacked and extended setSection.");
       return result;
     };
     appui.setSection = wrappedSetSectionRef;
@@ -3936,7 +3962,7 @@ var InjectedScript = (function(exports) {
   };
   const overrideSetMainSection = (appui) => {
     if (!appui || typeof appui.setMainSection !== "function") {
-      console.error("Not found appui.setMainSection function");
+      rpcBridge.log.error("Not found appui.setMainSection function");
       return NOOP_CLEANUP;
     }
     const originalSetMainSectionRef = appui.setMainSection;
@@ -4080,8 +4106,8 @@ var InjectedScript = (function(exports) {
         try {
           targetAppUi.setSection("agent", false);
         } catch (error) {
-          console.error(
-            "[MicroZoukei] Failed to restore the agent section after re-injection:",
+          rpcBridge.log.error(
+            "Failed to restore the agent section after re-injection:",
             error
           );
         }
@@ -4175,7 +4201,7 @@ var InjectedScript = (function(exports) {
         return;
       }
       window.microZoukei = rpcBridge;
-      rpcBridge.logMessage("info", "[MicroZoukei] RPC Bridge initialized and ready");
+      rpcBridge.log.info("RPC Bridge initialized and ready");
       await waitForMicroStudioLoad(token);
       if (token !== initializationToken) {
         return;

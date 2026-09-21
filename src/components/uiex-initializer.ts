@@ -7,6 +7,7 @@ import {
     startInitialIndexEventListening,
 } from './initial-index';
 import { overrideProjectLoaded } from './project-files';
+import { rpcBridge } from './rpc-bridge';
 
 interface ElementRegistration {
     id: string;
@@ -33,7 +34,7 @@ const runCleanup = (id: string): void => {
     try {
         registration.cleanup();
     } catch (error) {
-        console.error(`[MicroZoukei] Failed to clean up ${id}:`, error);
+        rpcBridge.log.error(`Failed to clean up ${id}:`, error);
     }
 };
 
@@ -154,7 +155,7 @@ const toggle_morespace = (): void => {
 const injectAgentMenuItem = (appui: any): Cleanup => {
     const ulElement = document.querySelector<HTMLUListElement>('#sidemenu ul');
     if (!ulElement) {
-        console.error('The specified `ul` element was not found.');
+        rpcBridge.log.error('The specified `ul` element was not found.');
         return NOOP_CLEANUP;
     }
 
@@ -201,11 +202,13 @@ const removeElement = (selector: string): void => {
 const removeElements = (): void => {
     removeElement('a[href="https://discord.com/invite/BDMqjxd"][target="_blank"]');
     removeElement('a[href="/community/"][target="_blank"]');
+    removeElement('div[id="qrcode-button"]');
+    removeElement('a[id="run-link"]');
 };
 
 const overrideCreateFullscreenFeatures = (appui: any): Cleanup => {
     if (!appui || typeof appui.createFullscreenFeatures !== 'function') {
-        console.error('Not found appui.createFullscreenFeatures function');
+        rpcBridge.log.error('Not found appui.createFullscreenFeatures function');
         return NOOP_CLEANUP;
     }
 
@@ -240,7 +243,7 @@ const overrideCreateFullscreenFeatures = (appui: any): Cleanup => {
                 window.dispatchEvent(new Event('fullscreenchange'));
             }
         } catch (err) {
-            console.error("Tauri Fullscreen Error:", err);
+            rpcBridge.log.error("Tauri Fullscreen Error:", err);
         }
     };
 
@@ -306,7 +309,7 @@ const overrideCreateFullscreenFeatures = (appui: any): Cleanup => {
 
 const overrideSetSection = (appui: any): Cleanup => {
     if (!appui || typeof appui.setSection !== 'function') {
-        console.error('Not found appui.setSection function');
+        rpcBridge.log.error('Not found appui.setSection function');
         return NOOP_CLEANUP;
     }
 
@@ -342,7 +345,7 @@ const overrideSetSection = (appui: any): Cleanup => {
             if (codeEditor && codeSection) {
                 cachedCodeEditor = codeEditor;
                 codeEditor.remove();
-                console.log('Moved the editor off the screen.');
+                rpcBridge.log.debug('Moved the editor off the screen.');
             }
 
             // Adjusting the Appearance of the Menu Button
@@ -368,11 +371,11 @@ const overrideSetSection = (appui: any): Cleanup => {
                 // Revert to the original editor before the chat window.
                 codeSection.insertBefore(cachedCodeEditor, chatWindow);
                 cachedCodeEditor = null;
-                console.log('The editor has been restored to the screen.');
+                rpcBridge.log.info('The editor has been restored to the screen.');
             }
         }
 
-        console.log('Successfully hijacked and extended setSection.');
+        rpcBridge.log.info('Successfully hijacked and extended setSection.');
         return result;
     };
 
@@ -394,7 +397,7 @@ const overrideSetSection = (appui: any): Cleanup => {
 
 const overrideSetMainSection = (appui: any): Cleanup => {
     if (!appui || typeof appui.setMainSection !== 'function') {
-        console.error('Not found appui.setMainSection function');
+        rpcBridge.log.error('Not found appui.setMainSection function');
         return NOOP_CLEANUP;
     }
 
@@ -623,8 +626,8 @@ export const initializeAppExtension = async (): Promise<Cleanup> => {
             try {
                 targetAppUi.setSection('agent', false);
             } catch (error) {
-                console.error(
-                    '[MicroZoukei] Failed to restore the agent section after re-injection:',
+                rpcBridge.log.error(
+                    'Failed to restore the agent section after re-injection:',
                     error
                 );
             }

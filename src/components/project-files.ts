@@ -68,13 +68,13 @@ const saveAllFilesToLocal = async (title: string, lang: string, filelist: Projec
     // Convert .ms extensions to appropriate target extensions based on language
     const processedFileList = convertFileExtensions(filelist, lang);
 
-    console.log('Saving files locally:', title, lang, processedFileList.length);
-    console.log(processedFileList);
+    rpcBridge.log.info('Saving files locally:', title, lang, processedFileList.length);
+    rpcBridge.log.info(processedFileList);
 
     if (processedFileList.length > 0) {
         await rpcBridge.syncFiles(title, processedFileList);
     } else {
-        console.log('not found files');
+        rpcBridge.log.info('not found files');
     }
 }
 
@@ -111,7 +111,7 @@ const processFileItem = async (item: any): Promise<ProjectFileItem | null> => {
             isBinaryBase64 = true;
         } catch (e) {
             // Keep comments minimal as per rule
-            console.error(`[Sync Fetch Error] ${item.url}:`, e);
+            rpcBridge.log.error(`[Sync Fetch Error] ${item.url}:`, e);
             return null;
         }
     }
@@ -145,7 +145,7 @@ const processFileGroup = async (fileTypeItems: any[]): Promise<ProjectFileItem[]
 export const getMicroStudioFileList = async (): Promise<ProjectFileItem[]> => {
     const project = (window as any).app?.project;
     if (!project) {
-        console.error("There is no information about the project.");
+        rpcBridge.log.error("There is no information about the project.");
         return [];
     }
 
@@ -219,7 +219,7 @@ export const overrideProjectLoaded = (): Cleanup => {
     const mainApp = (window as any).app;
 
     if (!mainApp || typeof mainApp.openProject !== 'function') {
-        console.error('Not found window.app.openProject.');
+        rpcBridge.log.error('Not found window.app.openProject.');
         return NOOP_CLEANUP;
     }
 
@@ -282,7 +282,7 @@ export const overrideProjectLoaded = (): Cleanup => {
     (newOpenProject as any).__isOverridden = true;
     mainApp.openProject = newOpenProject;
 
-    console.log('The event hook for `window.app.openProject` has completed.');
+    rpcBridge.log.info('The event hook for `window.app.openProject` has completed.');
 
     return () => {
         cancelled = true;

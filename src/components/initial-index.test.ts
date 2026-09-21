@@ -27,7 +27,7 @@ vi.mock('./rpc-bridge', () => ({
             valid: true,
             documentCount: 0,
         } as EnsureInitialIndexResponse),
-        logMessage: vi.fn().mockResolvedValue(undefined),
+        log: vi.fn().mockResolvedValue(undefined),
     },
 }));
 

@@ -60,7 +60,7 @@ export function showLoading(options?: LoadingOptions): void {
 
     // Check if already showing
     if (document.body.classList.contains(LOADING_CLASS)) {
-        rpcBridge.logMessage('info', '[MicroZoukei] Loading already visible');
+        rpcBridge.log.debug('Loading already visible');
         return;
     }
 
@@ -90,7 +90,7 @@ export function showLoading(options?: LoadingOptions): void {
 
     container.appendChild(loadingDiv);
 
-    rpcBridge.logMessage('info', '[MicroZoukei] Loading indicator shown');
+    rpcBridge.log.debug('Loading indicator shown');
 }
 
 /**
@@ -100,7 +100,7 @@ export function hideLoading(): void {
     const loadingElement = document.querySelector(`.${LOADING_CLASS}`);
     if (loadingElement) {
         loadingElement.remove();
-        rpcBridge.logMessage('info', '[MicroZoukei] Loading indicator hidden');
+        rpcBridge.log.debug('Loading indicator hidden');
     }
 }
 

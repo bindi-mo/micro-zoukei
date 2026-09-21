@@ -93,9 +93,8 @@ export function handleInitialIndexStatus(payload: InitialIndexStatusEvent): void
             clearInitialIndexResponseTimeout();
             resolveActiveRequest();
             hideIndexModal();
-            void rpcBridge.logMessage(
-                'info',
-                `[MicroZoukei] Initial index completed with ${payload.documentCount ?? 0} documents`
+            void rpcBridge.log.info(
+                `Initial index completed with ${payload.documentCount ?? 0} documents`
             );
             break;
         case 'failed': {
@@ -154,7 +153,7 @@ export function startInitialIndexEventListening(): Promise<void> {
         }
         unlistenInitialIndexStatus = unlisten;
     }).catch(error => {
-        console.error('[MicroZoukei] Failed to subscribe to initial index events:', error);
+        rpcBridge.log.error('Failed to subscribe to initial index events:', error);
         if (generation === listenerGeneration) {
             unlistenInitialIndexStatus = undefined;
         }

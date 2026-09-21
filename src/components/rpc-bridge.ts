@@ -14,7 +14,7 @@ const COMMAND_MAP: Record<string, string> = {
     writeFile: 'mzd_write_file',
     deleteFile: 'mzd_delete_file',
     syncFiles: 'mzd_sync_files',
-    logMessage: 'mzd_log_message',
+    log: 'mzd_log_message',
     health: 'mzd_health',
 };
 
@@ -84,6 +84,50 @@ async function fetchCommand(options: { commandName: string; args?: any }): Promi
     }
 }
 
+function stringifyLogArg(value: unknown): string {
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    if (value === undefined) {
+        return 'undefined';
+    }
+
+    if (value === null) {
+        return 'null';
+    }
+
+    try {
+        if (typeof value === 'object') {
+            return JSON.stringify(value) ?? String(value);
+        }
+
+        return String(value);
+    } catch {
+        return String(value);
+    }
+}
+
+async function log(level: LogLevel, ...args: unknown[]): Promise<void> {
+    const message = args.map(stringifyLogArg).join(' ');
+    await fetchCommand({
+        commandName: 'mzd_log_message',
+        args: { level, message }
+    });
+}
+
+log.debug = (...args: unknown[]): Promise<void> =>
+    log('debug', ...args);
+
+log.info = (...args: unknown[]): Promise<void> =>
+    log('info', ...args);
+
+log.warn = (...args: unknown[]): Promise<void> =>
+    log('warn', ...args);
+
+log.error = (...args: unknown[]): Promise<void> =>
+    log('error', ...args);
+
 /**
  * RPC Bridge implementation exposed to the WebView environment.
  */
@@ -123,12 +167,7 @@ export const rpcBridge: MicroZoukeiAPI = {
         }) as SyncFilesResponse;
     },
 
-    logMessage: async (level: LogLevel, message: string): Promise<void> => {
-        await fetchCommand({
-            commandName: 'mzd_log_message',
-            args: { level, message }
-        });
-    },
+    log,
 
     ensureInitialIndex: async () => {
         return await fetchCommand({
