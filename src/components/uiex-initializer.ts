@@ -193,7 +193,7 @@ const injectAgentMenuItem = (appui: any): Cleanup => {
 };
 
 // --------------------------------------------------------------------
-// Deleting (or Hiding) Unnecessary Existing Elements
+// Deleting Unnecessary Existing Elements
 // --------------------------------------------------------------------
 const removeElement = (selector: string): void => {
     document.querySelector(selector)?.remove();
@@ -202,9 +202,20 @@ const removeElement = (selector: string): void => {
 const removeElements = (): void => {
     removeElement('a[href="https://discord.com/invite/BDMqjxd"][target="_blank"]');
     removeElement('a[href="/community/"][target="_blank"]');
-    removeElement('div[id="qrcode-button"]');
-    removeElement('a[id="run-link"]');
 };
+
+// --------------------------------------------------------------------
+// Hiding Unnecessary Existing Elements
+// --------------------------------------------------------------------
+const hiddenElement = (selector: string): void => {
+    const element: HTMLElement = document.querySelector(selector)!;
+    element.style.visibility = 'hidden';
+};
+
+const hiddenElements = (): void => {
+    hiddenElement('div[id="qrcode-button"]');
+    hiddenElement('a[id="run-link"]');
+}
 
 const overrideCreateFullscreenFeatures = (appui: any): Cleanup => {
     if (!appui || typeof appui.createFullscreenFeatures !== 'function') {
@@ -553,9 +564,10 @@ export const initializeAppExtension = async (): Promise<Cleanup> => {
         }
 
         // -------------------------------------------
-        // step 1: remove
+        // step 1: remove and hidden
         // -------------------------------------------
         removeElements();
+        hiddenElements();
 
         // -------------------------------------------
         // step 2: add

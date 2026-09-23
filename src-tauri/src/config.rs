@@ -278,12 +278,7 @@ fn highest_configured_level(config: &LoggerConfig) -> log::LevelFilter {
         config.commands.into(),
         config.diff.into(),
     ];
-    levels.extend(
-        config
-            .dynamic
-            .values()
-            .map(|l| log::LevelFilter::from(*l)),
-    );
+    levels.extend(config.dynamic.values().map(|l| log::LevelFilter::from(*l)));
     levels
         .into_iter()
         .filter(|level| *level != log::LevelFilter::Off)
