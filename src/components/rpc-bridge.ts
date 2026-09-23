@@ -146,10 +146,10 @@ export const rpcBridge: MicroZoukeiAPI = {
         }) as string;
     },
 
-    writeFile: async (path: string, content: string) => {
+    writeFile: async (path: string, file: ProjectFileItem) => {
         return await fetchCommand({
             commandName: 'mzd_write_file',
-            args: { path, content }
+            args: { path, file }
         }) as boolean;
     },
 

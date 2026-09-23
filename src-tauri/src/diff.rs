@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::Path;
 
-pub fn init_db(db_path: &PathBuf) -> Result<(), String> {
+pub fn init_db(db_path: &Path) -> Result<(), String> {
     let conn = rusqlite::Connection::open(db_path)
         .map_err(|e| format!("Failed to open diff DB: {}", e))?;
     conn.execute_batch(
@@ -16,7 +16,8 @@ pub fn init_db(db_path: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-pub fn save_diff(db_path: &PathBuf, file_path: &str, diff_text: &str) -> Result<i64, String> {
+pub fn save_diff(db_path: &Path, file_path: &str, diff_text: &str) -> Result<i64, String> {
+    init_db(db_path)?;
     let conn = rusqlite::Connection::open(db_path)
         .map_err(|e| format!("Failed to open diff DB: {}", e))?;
     conn.execute(
@@ -27,11 +28,7 @@ pub fn save_diff(db_path: &PathBuf, file_path: &str, diff_text: &str) -> Result<
     Ok(conn.last_insert_rowid())
 }
 
-pub fn save_diff_with_log(
-    db_path: &PathBuf,
-    file_path: &str,
-    diff_text: &str,
-) -> Result<i64, String> {
+pub fn save_diff_with_log(db_path: &Path, file_path: &str, diff_text: &str) -> Result<i64, String> {
     let result = save_diff(db_path, file_path, diff_text);
     if let Err(error) = &result {
         log::error!("Failed to save diff for {}: {}", file_path, error);
@@ -39,7 +36,8 @@ pub fn save_diff_with_log(
     result
 }
 
-pub fn get_all_diffs(db_path: &PathBuf) -> Result<Vec<(String, String)>, String> {
+pub fn get_all_diffs(db_path: &Path) -> Result<Vec<(String, String)>, String> {
+    init_db(db_path)?;
     let conn = rusqlite::Connection::open(db_path)
         .map_err(|e| format!("Failed to open diff DB: {}", e))?;
     let mut stmt = conn
@@ -52,7 +50,8 @@ pub fn get_all_diffs(db_path: &PathBuf) -> Result<Vec<(String, String)>, String>
         .map_err(|e| format!("Failed to collect: {}", e))
 }
 
-pub fn get_diffs_for_file(db_path: &PathBuf, file_path: &str) -> Result<Vec<String>, String> {
+pub fn get_diffs_for_file(db_path: &Path, file_path: &str) -> Result<Vec<String>, String> {
+    init_db(db_path)?;
     let conn = rusqlite::Connection::open(db_path)
         .map_err(|e| format!("Failed to open diff DB: {}", e))?;
     let mut stmt = conn
@@ -67,7 +66,8 @@ pub fn get_diffs_for_file(db_path: &PathBuf, file_path: &str) -> Result<Vec<Stri
         .map_err(|e| format!("Failed to collect: {}", e))
 }
 
-pub fn delete_diffs_for_file(db_path: &PathBuf, file_path: &str) -> Result<usize, String> {
+pub fn delete_diffs_for_file(db_path: &Path, file_path: &str) -> Result<usize, String> {
+    init_db(db_path)?;
     let conn = rusqlite::Connection::open(db_path)
         .map_err(|e| format!("Failed to open diff DB: {}", e))?;
     conn.execute(
@@ -77,35 +77,56 @@ pub fn delete_diffs_for_file(db_path: &PathBuf, file_path: &str) -> Result<usize
     .map_err(|e| format!("Failed to delete: {}", e))
 }
 
-pub fn delete_all_diffs(db_path: &PathBuf) -> Result<usize, String> {
+pub fn delete_all_diffs(db_path: &Path) -> Result<usize, String> {
+    init_db(db_path)?;
     let conn = rusqlite::Connection::open(db_path)
         .map_err(|e| format!("Failed to open diff DB: {}", e))?;
     conn.execute("DELETE FROM diffs", rusqlite::params![])
         .map_err(|e| format!("Failed to delete all: {}", e))
 }
 
-pub fn compute_diff(old: &str, new: &str) -> String {
+pub fn compute_diff(old: &str, new: &str) -> Option<String> {
+    if old == new {
+        return None;
+    }
+
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
-    let mut result = String::from("--- old\n+++ new\n");
     let max_lines = old_lines.len().max(new_lines.len());
+
     if max_lines == 0 {
-        return result;
+        return None;
     }
-    result.push_str("@@ -1 +1 @@\n");
+
+    let mut result = String::from("--- old\n+++ new\n@@ -1 +1 @@\n");
+    let mut has_diff = false;
+
     for i in 0..max_lines {
         let ol = old_lines.get(i).copied().unwrap_or("");
         let nl = new_lines.get(i).copied().unwrap_or("");
+
         if ol == nl {
-            result.push_str(&format!(" {}\n", ol));
+            result.push(' ');
+            result.push_str(ol);
+            result.push('\n');
         } else {
+            has_diff = true;
             if i < old_lines.len() {
-                result.push_str(&format!("-{}\n", ol));
+                result.push('-');
+                result.push_str(ol);
+                result.push('\n');
             }
             if i < new_lines.len() {
-                result.push_str(&format!("+{}\n", nl));
+                result.push('+');
+                result.push_str(nl);
+                result.push('\n');
             }
         }
     }
-    result
+
+    if has_diff {
+        Some(result)
+    } else {
+        None
+    }
 }

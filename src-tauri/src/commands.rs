@@ -1,6 +1,6 @@
-use crate::handlers::{map_error, CommandPayload, CommandResponse};
+use crate::handlers::{map_error, CommandPayload, CommandResponse, ProjectFileItem};
 use crate::initial_index::EnsureInitialIndexResponse;
-use serde_json::Value;
+use serde_json::{from_value, Value};
 
 pub async fn mzd_list_files(path: String) -> Result<serde_json::Value, String> {
     crate::handlers::handle_list_files(path).await
@@ -12,8 +12,8 @@ pub async fn mzd_read_file(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn mzd_write_file(path: String, content: String) -> Result<bool, String> {
-    crate::handlers::handle_write_file(path, content).await
+pub async fn mzd_write_file(path: String, file: ProjectFileItem) -> Result<bool, String> {
+    crate::handlers::handle_write_file(path, file).await
 }
 
 #[tauri::command]
@@ -24,7 +24,7 @@ pub async fn mzd_delete_file(path: String) -> Result<bool, String> {
 #[tauri::command]
 pub async fn mzd_sync_files(
     title: String,
-    filelist: Vec<Value>,
+    filelist: Vec<ProjectFileItem>,
 ) -> Result<serde_json::Value, String> {
     crate::handlers::handle_sync_files(title, filelist).await
 }
@@ -86,23 +86,29 @@ pub async fn dispatch_command_with_handle(
             )
             .await,
         ),
-        "mzd_write_file" => map_error(
-            crate::handlers::handle_write_file(
-                payload
-                    .args
-                    .get("path")
-                    .cloned()
-                    .unwrap_or_default()
-                    .to_string(),
-                payload
-                    .args
-                    .get("content")
-                    .cloned()
-                    .unwrap_or_default()
-                    .to_string(),
+        "mzd_write_file" => {
+            let file = match from_value::<ProjectFileItem>(
+                payload.args.get("file").cloned().unwrap_or_default(),
+            ) {
+                Ok(file) => file,
+                Err(error) => {
+                    return CommandResponse::error(format!("Invalid file argument: {}", error));
+                }
+            };
+
+            map_error(
+                crate::handlers::handle_write_file(
+                    payload
+                        .args
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    file,
+                )
+                .await,
             )
-            .await,
-        ),
+        }
         "mzd_delete_file" => map_error(
             crate::handlers::handle_delete_file(
                 payload
@@ -114,21 +120,29 @@ pub async fn dispatch_command_with_handle(
             )
             .await,
         ),
-        "mzd_sync_files" => map_error(
-            crate::handlers::handle_sync_files(
-                payload
-                    .args
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                match payload.args.get("files") {
-                    Some(val) => val.as_array().cloned().unwrap_or_else(Vec::new),
-                    None => Vec::new(),
-                },
+        "mzd_sync_files" => {
+            let files = match from_value::<Vec<ProjectFileItem>>(
+                payload.args.get("files").cloned().unwrap_or_default(),
+            ) {
+                Ok(files) => files,
+                Err(error) => {
+                    return CommandResponse::error(format!("Invalid files argument: {}", error));
+                }
+            };
+
+            map_error(
+                crate::handlers::handle_sync_files(
+                    payload
+                        .args
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    files,
+                )
+                .await,
             )
-            .await,
-        ),
+        }
         "mzd_log_message" => {
             let level = payload
                 .args

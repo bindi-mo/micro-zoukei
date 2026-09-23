@@ -91,10 +91,10 @@ var InjectedScript = (function(exports) {
         args: { path }
       });
     },
-    writeFile: async (path, content) => {
+    writeFile: async (path, file) => {
       return await fetchCommand({
         commandName: "mzd_write_file",
-        args: { path, content }
+        args: { path, file }
       });
     },
     deleteFile: async (path) => {
@@ -3517,10 +3517,21 @@ var InjectedScript = (function(exports) {
     const processedFileList = convertFileExtensions(filelist, lang);
     rpcBridge.log.info("Saving files locally:", title, lang, processedFileList.length);
     rpcBridge.log.info(processedFileList);
-    if (processedFileList.length > 0) {
-      await rpcBridge.syncFiles(title, processedFileList);
-    } else {
+    if (processedFileList.length === 0) {
       rpcBridge.log.info("not found files");
+      return;
+    }
+    const response = await rpcBridge.syncFiles(title, processedFileList);
+    const failedFiles = response.errors?.length ?? 0;
+    rpcBridge.log.info("Project file sync completed:", title, {
+      processed: response.files_processed ?? 0,
+      skipped: response.files_skipped ?? 0,
+      failed: failedFiles
+    });
+    if (failedFiles > 0) {
+      rpcBridge.log.error("Failed to save project files:", title, response.errors);
+    } else if (!response.success) {
+      rpcBridge.log.error("Project file sync failed without file-level errors:", title, response);
     }
   };
   const fetchAsBase64 = async (url) => {
@@ -3639,7 +3650,7 @@ var InjectedScript = (function(exports) {
           const currentFiles = await getMicroStudioFileList();
           if (cancelled) return;
           if (currentFiles.length > 0) {
-            saveAllFilesToLocal(title, lang, currentFiles);
+            await saveAllFilesToLocal(title, lang, currentFiles);
           }
           return;
         }
@@ -3818,8 +3829,14 @@ var InjectedScript = (function(exports) {
   const removeElements = () => {
     removeElement('a[href="https://discord.com/invite/BDMqjxd"][target="_blank"]');
     removeElement('a[href="/community/"][target="_blank"]');
-    removeElement('div[id="qrcode-button"]');
-    removeElement('a[id="run-link"]');
+  };
+  const hiddenElement = (selector) => {
+    const element = document.querySelector(selector);
+    element.style.visibility = "hidden";
+  };
+  const hiddenElements = () => {
+    hiddenElement('div[id="qrcode-button"]');
+    hiddenElement('a[id="run-link"]');
   };
   const overrideCreateFullscreenFeatures = (appui) => {
     if (!appui || typeof appui.createFullscreenFeatures !== "function") {
@@ -4067,6 +4084,7 @@ var InjectedScript = (function(exports) {
         return NOOP_CLEANUP;
       }
       removeElements();
+      hiddenElements();
       const projectIcon = document.getElementById("project-icon");
       if (!document.getElementById("project-morespace") && projectIcon instanceof HTMLElement) {
         const icon = document.createElement("i");

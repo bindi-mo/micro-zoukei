@@ -71,10 +71,24 @@ const saveAllFilesToLocal = async (title: string, lang: string, filelist: Projec
     rpcBridge.log.info('Saving files locally:', title, lang, processedFileList.length);
     rpcBridge.log.info(processedFileList);
 
-    if (processedFileList.length > 0) {
-        await rpcBridge.syncFiles(title, processedFileList);
-    } else {
+    if (processedFileList.length === 0) {
         rpcBridge.log.info('not found files');
+        return;
+    }
+
+    const response = await rpcBridge.syncFiles(title, processedFileList);
+    const failedFiles = response.errors?.length ?? 0;
+
+    rpcBridge.log.info('Project file sync completed:', title, {
+        processed: response.files_processed ?? 0,
+        skipped: response.files_skipped ?? 0,
+        failed: failedFiles,
+    });
+
+    if (failedFiles > 0) {
+        rpcBridge.log.error('Failed to save project files:', title, response.errors);
+    } else if (!response.success) {
+        rpcBridge.log.error('Project file sync failed without file-level errors:', title, response);
     }
 }
 
@@ -259,7 +273,7 @@ export const overrideProjectLoaded = (): Cleanup => {
                 const currentFiles = await getMicroStudioFileList();
                 if (cancelled) return;
                 if (currentFiles.length > 0) {
-                    saveAllFilesToLocal(title, lang, currentFiles);
+                    await saveAllFilesToLocal(title, lang, currentFiles);
                 }
                 return;
             }

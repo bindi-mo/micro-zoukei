@@ -15,6 +15,7 @@ export interface SyncFilesResponse {
     message?: string;
     errors?: Array<{ path: string; error: string }>;
     files_processed?: number;
+    files_skipped?: number;
 }
 
 /**
@@ -55,7 +56,7 @@ export interface MicroZoukeiAPI {
     readFile(path: string): Promise<string>;
 
     /** Write file content */
-    writeFile(path: string, content: string): Promise<boolean>;
+    writeFile(path: string, file: ProjectFileItem): Promise<boolean>;
 
     /** Delete a file */
     deleteFile(path: string): Promise<boolean>;

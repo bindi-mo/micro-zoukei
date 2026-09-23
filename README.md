@@ -119,6 +119,68 @@ All interactions with your local filesystem or project state are encapsulated in
 - File path resolution is handled consistently by the core logic.
 - Project states remain synchronized between the UI and the background backend.
 
+#### Project File RPC Contract
+
+The frontend sends project-file operations through the local proxy as JSON RPC requests. The proxy dispatcher validates the typed payload before invoking the handler:
+
+```json
+{
+  "command": "mzd_write_file",
+  "args": {
+    "path": "Project Title",
+    "file": {
+      "file": "src/main.ms",
+      "content": "print('hello')",
+      "isBinaryBase64": false
+    }
+  }
+}
+```
+
+```json
+{
+  "command": "mzd_sync_files",
+  "args": {
+    "title": "Project Title",
+    "files": [
+      {
+        "file": "src/main.ms",
+        "content": "print('hello')",
+        "isBinaryBase64": false
+      }
+    ]
+  }
+}
+```
+
+`mzd_write_file` overwrites an existing destination. `mzd_sync_files` is a bulk create operation: each destination is opened with create-only semantics, so an existing file is skipped and later input entries for the same path cannot replace the first one.
+
+A file destination is resolved as `<projects.path>/<project-title>/<relative-file>`. Project titles and file paths must be non-empty relative paths; absolute paths, parent traversal, and path roots are rejected. Rust canonicalizes the configured project root and the nearest existing destination ancestor, then verifies canonical containment. Symlink components below the project root are rejected. A symlink used by the configured projects root itself is allowed and writes resolve to its canonical target. Missing parent directories are created, followed by a second containment and symlink check.
+
+Text content is written as UTF-8 bytes. When `isBinaryBase64` is true, `content` must be valid standard Base64 and is decoded before writing. The frontend converts microStudio `.ms` source paths to the configured language extension before sending the bulk request.
+
+For non-binary `.ms` writes, Rust computes and persists a line diff in the SQLite database at `<workspace>/diffs.db`. Every diff database operation initializes the schema when necessary, including reads and deletes. A diff persistence failure is logged without failing an otherwise successful file write.
+
+Bulk synchronization processes files independently and returns partial results:
+
+```json
+{
+  "success": false,
+  "errors": [
+    {
+      "path": "src/bad.ms",
+      "error": "permission denied"
+    }
+  ],
+  "files_processed": 2,
+  "files_skipped": 1
+}
+```
+
+`success` is false when at least one file fails, even when other files were written successfully. `files_processed` counts newly created files, `files_skipped` counts existing files, and `errors` contains one entry per failed path. The frontend awaits the bulk operation and logs processed, skipped, and failed counts plus the individual errors.
+
+These checks substantially reduce path-escape and symlink-following risks. A residual check-then-open TOCTOU window remains because filesystem validation and the final open/write are separate operations; hardening that boundary would require platform-specific open-at APIs with descriptor-relative traversal.
+
 ### 3. Frontend Integration
 The frontend component is minimized. Primary interaction occurs through the injected bridge, allowing for a smooth experience that feels like it's running natively on `microstudio.dev` while maintaining deep integration with your local workspace.
 

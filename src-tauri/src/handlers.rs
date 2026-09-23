@@ -1,11 +1,24 @@
+use crate::diff::save_diff_with_log;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::path::PathBuf;
+use serde_json::json;
+use std::io::ErrorKind;
+use std::path::{Component, Path, PathBuf};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
 use crate::agent::rag::ensure_initial_index;
 use crate::initial_index::{EnsureInitialIndexResponse, InitialIndexStatusEvent};
+
+// Define structs that correspond to TypeScript types for the front end
+// see injected.d.ts
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFileItem {
+    pub file: String,
+    pub content: String,
+    pub is_binary_base64: bool,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommandPayload {
@@ -89,24 +102,10 @@ pub async fn handle_read_file(path: String) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-pub async fn handle_write_file(path: String, content: String) -> Result<bool, String> {
-    let full_path = resolve_path(&path)?;
-
-    // Compute diff before writing
-    let old_content = if full_path.exists() {
-        fs::read_to_string(&full_path).await.unwrap_or_default()
-    } else {
-        String::new()
-    };
-
-    // Save diff to rusqlite
-    let diff_text = crate::diff::compute_diff(&old_content, &content);
-    let _ = crate::diff::save_diff_with_log(&diff_db_path(), &path, &diff_text);
-
-    fs::write(full_path, content)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(true)
+pub async fn handle_write_file(title: String, file: ProjectFileItem) -> Result<bool, String> {
+    let project_dir = get_project_path(&title).await?;
+    let db_path = diff_db_path();
+    write_project_file(&project_dir, file, &db_path, true).await
 }
 
 pub async fn handle_delete_file(path: String) -> Result<bool, String> {
@@ -151,105 +150,46 @@ pub async fn handle_health() -> Result<serde_json::Value, String> {
 
 pub async fn handle_sync_files(
     title: String,
-    files: Vec<Value>,
+    files: Vec<ProjectFileItem>,
 ) -> Result<serde_json::Value, String> {
-    let project_path = {
-        let state = crate::APP_STATE.lock().unwrap();
-        state.config_state.projects.path.clone()
-    };
-    let save_path = std::path::PathBuf::from(&project_path).join(&title);
-    log::info!("Sync destination: {}", save_path.display());
+    let project_dir = get_project_path(&title).await?;
+    let db_path = diff_db_path();
+    sync_project_files(&project_dir, files, &db_path).await
+}
 
-    if files.is_empty() {
-        log::info!("There are no files to sync");
-        return Ok(json!({
-            "status": "error",
-            "files_processed": 0
-        }));
-    }
-
-    if !save_path.exists() {
-        if let Err(error) = fs::create_dir_all(&save_path).await {
-            return Err(format!(
-                "Failed to create save directory {}: {}",
-                save_path.display(),
-                error
-            ));
-        }
-    }
-
+async fn sync_project_files(
+    project_dir: &Path,
+    files: Vec<ProjectFileItem>,
+    db_path: &Path,
+) -> Result<serde_json::Value, String> {
     let mut files_processed = 0;
+    let mut files_skipped = 0;
+    let mut errors = Vec::new();
 
-    for file_obj in &files {
-        // 1. Getting the File Path
-        let file_path = match file_obj.get("file").and_then(|v| v.as_str()) {
-            Some(path) if !path.is_empty() => path,
-            _ => {
-                log::warn!("Invalid or missing 'file' key");
-                continue;
+    for file in files {
+        let file_path = file.file.clone();
+
+        match write_project_file(project_dir, file, db_path, false).await {
+            Ok(true) => files_processed += 1,
+            Ok(false) => {
+                files_skipped += 1;
+                log::info!("Skipped existing file: {}", file_path);
             }
-        };
-
-        // 2. Retrieving Content (String)
-        let content_str = match file_obj.get("content").and_then(|v| v.as_str()) {
-            Some(c) => c,
-            None => {
-                log::warn!("No content found for file: {}", file_path);
-                continue;
+            Err(error) => {
+                log::warn!("Failed to write {}: {}", file_path, error);
+                errors.push(json!({
+                    "path": file_path,
+                    "error": error
+                }));
             }
-        };
-
-        // 3. Check the isBinaryBase64 flag and prepare the data (byte sequence) to be written
-        let is_binary = file_obj
-            .get("isBinaryBase64")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let bytes: Vec<u8> = if is_binary {
-            // For binary (Base64) data: Decoding process
-            match base64::engine::general_purpose::STANDARD.decode(content_str) {
-                Ok(decoded) => decoded,
-                Err(e) => {
-                    log::warn!("Failed to decode base64 for {}: {}", file_path, e);
-                    continue; // If the Base64 is invalid, skip it at this point (without triggering any I/O).
-                }
-            }
-        } else {
-            // For ASCII/text: Convert directly to a byte array
-            content_str.as_bytes().to_vec()
-        };
-
-        // 4. File Path Resolution and Duplicate Checks (I/O Processing)
-        let full_path = save_path.join(file_path);
-
-        // 4a. Compute diff before writing (if file already exists)
-        if full_path.exists() {
-            let old_content = fs::read_to_string(&full_path).await.unwrap_or_default();
-            let new_content = String::from_utf8_lossy(&bytes).to_string();
-            let diff_text = crate::diff::compute_diff(&old_content, &new_content);
-            let _ = crate::diff::save_diff_with_log(&diff_db_path(), file_path, &diff_text);
-        }
-
-        // 5. Creating and Writing to Directories (I/O Processing)
-        if let Some(parent) = full_path.parent() {
-            if let Err(e) = fs::create_dir_all(parent).await {
-                log::error!("Failed to create parent directory for {}: {}", file_path, e);
-                continue;
-            }
-        }
-
-        match fs::write(&full_path, &bytes).await {
-            Ok(_) => {
-                files_processed += 1;
-                log::info!("Wrote file: {}", full_path.display());
-            }
-            Err(e) => log::error!("Failed to write file {}: {}", file_path, e),
         }
     }
 
     Ok(json!({
-        "status": "success",
-        "files_processed": files_processed
+        "success": errors.is_empty(),
+        "errors": errors,
+        "files_processed": files_processed,
+        "files_skipped": files_skipped
     }))
 }
 
@@ -434,4 +374,479 @@ pub async fn handle_ensure_initial_index(
         valid: false,
         document_count: 0,
     })
+}
+
+async fn write_project_file(
+    project_dir: &Path,
+    file: ProjectFileItem,
+    db_path: &Path,
+    overwrite: bool,
+) -> Result<bool, String> {
+    let file_path = Path::new(&file.file);
+    ensure_safe_relative_path(file_path, "file")?;
+
+    let bytes = if file.is_binary_base64 {
+        base64::engine::general_purpose::STANDARD
+            .decode(&file.content)
+            .map_err(|error| {
+                format!(
+                    "Failed to decode Base64 content for {}: {}",
+                    file.file, error
+                )
+            })?
+    } else {
+        file.content.as_bytes().to_vec()
+    };
+
+    let full_path = build_project_file_path(project_dir, file_path)?;
+    ensure_path_within_project(project_dir, &full_path).await?;
+
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent).await.map_err(|error| {
+            format!("Failed to create directory {}: {}", parent.display(), error)
+        })?;
+    }
+
+    // Re-check after creating missing parents because a parent may have been
+    // replaced by a symlink between the first check and directory creation.
+    ensure_path_within_project(project_dir, &full_path).await?;
+
+    if !overwrite {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        let mut output = match options.open(&full_path).await {
+            Ok(output) => output,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                log::info!("Skipped existing file: {}", file.file);
+                return Ok(false);
+            }
+            Err(error) => {
+                return Err(format!("Failed to create file {}: {}", file.file, error));
+            }
+        };
+
+        output
+            .write_all(&bytes)
+            .await
+            .map_err(|error| format!("Failed to write file {}: {}", file.file, error))?;
+        output
+            .shutdown()
+            .await
+            .map_err(|error| format!("Failed to finalize file {}: {}", file.file, error))?;
+
+        if !file.is_binary_base64 && contains_ms_extension(file_path) {
+            let new_content = String::from_utf8_lossy(&bytes);
+            if let Some(diff_text) = crate::diff::compute_diff("", new_content.as_ref()) {
+                if let Err(error) = save_diff_with_log(db_path, &file.file, &diff_text) {
+                    log::warn!("Failed to save diff for {}: {}", file.file, error);
+                }
+            }
+        }
+
+        log::info!("Created file: {}", file.file);
+        return Ok(true);
+    }
+
+    if !file.is_binary_base64 && contains_ms_extension(file_path) {
+        match fs::read_to_string(&full_path).await {
+            Ok(old_content) => {
+                let new_content = String::from_utf8_lossy(&bytes);
+                if let Some(diff_text) =
+                    crate::diff::compute_diff(&old_content, new_content.as_ref())
+                {
+                    if let Err(error) = save_diff_with_log(db_path, &file.file, &diff_text) {
+                        log::warn!("Failed to save diff for {}: {}", file.file, error);
+                    }
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Failed to read existing file {}: {}",
+                    file.file, error
+                ));
+            }
+        }
+    }
+
+    fs::write(&full_path, &bytes)
+        .await
+        .map_err(|error| format!("Failed to write file {}: {}", file.file, error))?;
+
+    log::info!("Wrote file: {}", file.file);
+    Ok(true)
+}
+
+fn build_project_file_path(project_dir: &Path, file_path: &Path) -> Result<PathBuf, String> {
+    let mut full_path = project_dir.to_path_buf();
+    for component in file_path.components() {
+        if let Component::Normal(name) = component {
+            full_path.push(name);
+        }
+    }
+    Ok(full_path)
+}
+
+async fn ensure_path_within_project(project_dir: &Path, full_path: &Path) -> Result<(), String> {
+    let canonical_project_dir = fs::canonicalize(project_dir).await.map_err(|error| {
+        format!(
+            "Failed to resolve project directory {}: {}",
+            project_dir.display(),
+            error
+        )
+    })?;
+
+    let anchor = nearest_existing_ancestor(full_path)?;
+    ensure_no_symlink_components(project_dir, &anchor).await?;
+
+    let canonical_anchor = fs::canonicalize(&anchor)
+        .await
+        .map_err(|error| format!("Failed to resolve path {}: {}", anchor.display(), error))?;
+
+    if !canonical_anchor.starts_with(&canonical_project_dir) {
+        return Err(format!(
+            "Path escapes project directory: {}",
+            full_path.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn nearest_existing_ancestor(path: &Path) -> Result<PathBuf, String> {
+    let mut ancestor = path;
+    loop {
+        if ancestor.exists() {
+            return Ok(ancestor.to_path_buf());
+        }
+        ancestor = ancestor
+            .parent()
+            .ok_or_else(|| format!("Failed to resolve parent for {}", path.display()))?;
+    }
+}
+
+async fn ensure_no_symlink_components(project_dir: &Path, path: &Path) -> Result<(), String> {
+    let relative_path = path
+        .strip_prefix(project_dir)
+        .map_err(|_| format!("Path is outside project directory: {}", path.display()))?;
+
+    let mut current = project_dir.to_path_buf();
+    for component in relative_path.components() {
+        let Component::Normal(name) = component else {
+            return Err(format!("Invalid project path: {}", path.display()));
+        };
+        current.push(name);
+
+        match fs::symlink_metadata(&current).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "Symbolic links are not allowed in project paths: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to inspect path {}: {}",
+                    current.display(),
+                    error
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_safe_relative_path(path: &Path, description: &str) -> Result<(), String> {
+    if path.as_os_str().is_empty() {
+        return Err(format!("Invalid or missing '{}'", description));
+    }
+
+    for component in path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            _ => return Err(format!("Invalid {} path: {}", description, path.display())),
+        }
+    }
+
+    Ok(())
+}
+
+fn contains_ms_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ms"))
+}
+
+async fn get_project_path(title: &str) -> Result<PathBuf, String> {
+    ensure_safe_relative_path(Path::new(title), "project title")?;
+
+    let project_path = {
+        let state = crate::APP_STATE.lock().unwrap();
+        state.config_state.projects.path.clone()
+    };
+
+    if project_path.is_empty() {
+        return Err("Projects path is not configured".to_string());
+    }
+
+    let project_dir = PathBuf::from(project_path).join(Path::new(title));
+    log::info!("Sync destination: {}", project_dir.display());
+
+    fs::create_dir_all(&project_dir).await.map_err(|error| {
+        format!(
+            "Failed to create save directory {}: {}",
+            project_dir.display(),
+            error
+        )
+    })?;
+
+    Ok(project_dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diff::get_all_diffs;
+    use serde_json::Value;
+    use tempfile::TempDir;
+
+    fn project_file(file: &str, content: &str, is_binary_base64: bool) -> ProjectFileItem {
+        ProjectFileItem {
+            file: file.to_string(),
+            content: content.to_string(),
+            is_binary_base64,
+        }
+    }
+
+    #[tokio::test]
+    async fn writes_nested_text_and_persists_diff_on_overwrite() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let project_dir = temp_dir.path().join("project");
+        fs::create_dir_all(&project_dir)
+            .await
+            .expect("failed to create project dir");
+        let db_path = temp_dir.path().join("diffs.db");
+        let file_path = "src/main.ms";
+        let output_path = project_dir.join("src/main.ms");
+
+        let first_write = write_project_file(
+            &project_dir,
+            project_file(file_path, "first", false),
+            &db_path,
+            true,
+        )
+        .await;
+        assert_eq!(first_write, Ok(true));
+        assert_eq!(
+            fs::read_to_string(&output_path)
+                .await
+                .expect("first output"),
+            "first"
+        );
+
+        let second_write = write_project_file(
+            &project_dir,
+            project_file(file_path, "second", false),
+            &db_path,
+            true,
+        )
+        .await;
+        assert_eq!(second_write, Ok(true));
+        assert_eq!(
+            fs::read_to_string(&output_path)
+                .await
+                .expect("second output"),
+            "second"
+        );
+
+        let expected_diff = crate::diff::compute_diff("first", "second").expect("expected a diff");
+        assert_eq!(
+            get_all_diffs(&db_path).expect("stored diffs"),
+            vec![(file_path.to_string(), expected_diff)]
+        );
+    }
+
+    #[tokio::test]
+    async fn decodes_and_writes_binary_base64_content() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let project_dir = temp_dir.path().join("project");
+        fs::create_dir_all(&project_dir)
+            .await
+            .expect("failed to create project dir");
+        let db_path = temp_dir.path().join("diffs.db");
+
+        let result = write_project_file(
+            &project_dir,
+            project_file("assets/item.bin", "AAEC/w==", true),
+            &db_path,
+            true,
+        )
+        .await;
+
+        assert_eq!(result, Ok(true));
+        assert_eq!(
+            fs::read(project_dir.join("assets/item.bin"))
+                .await
+                .expect("binary output"),
+            vec![0, 1, 2, 0xff]
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_base64_before_creating_file() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let project_dir = temp_dir.path().join("project");
+        fs::create_dir_all(&project_dir)
+            .await
+            .expect("failed to create project dir");
+        let db_path = temp_dir.path().join("diffs.db");
+        let file_path = "assets/broken.bin";
+
+        let result = write_project_file(
+            &project_dir,
+            project_file(file_path, "not base64!", true),
+            &db_path,
+            true,
+        )
+        .await;
+
+        assert!(result.unwrap_err().contains("Failed to decode Base64"));
+        assert!(!project_dir.join(file_path).exists());
+    }
+
+    #[test]
+    fn rejects_absolute_parent_and_traversal_paths() {
+        for path in [
+            Path::new("/tmp/escape.txt"),
+            Path::new("../escape.txt"),
+            Path::new("safe/../../escape.txt"),
+        ] {
+            assert!(
+                ensure_safe_relative_path(path, "file").is_err(),
+                "accepted unsafe path: {}",
+                path.display()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bulk_sync_skips_duplicates_but_individual_write_overwrites() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let project_dir = temp_dir.path().join("project");
+        fs::create_dir_all(&project_dir)
+            .await
+            .expect("failed to create project dir");
+        let db_path = temp_dir.path().join("diffs.db");
+        let file_path = "src/main.ms";
+        let output_path = project_dir.join("src/main.ms");
+        let files = vec![
+            project_file(file_path, "first", false),
+            project_file(file_path, "duplicate", false),
+        ];
+
+        let response = sync_project_files(&project_dir, files, &db_path)
+            .await
+            .expect("bulk sync failed");
+        assert_eq!(response.get("success").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            response.get("files_processed").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            response.get("files_skipped").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            fs::read_to_string(&output_path).await.expect("bulk output"),
+            "first"
+        );
+
+        let overwrite = write_project_file(
+            &project_dir,
+            project_file(file_path, "second", false),
+            &db_path,
+            true,
+        )
+        .await;
+        assert_eq!(overwrite, Ok(true));
+        assert_eq!(
+            fs::read_to_string(&output_path)
+                .await
+                .expect("overwritten output"),
+            "second"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rejects_symlink_component_that_escapes_project() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let project_dir = temp_dir.path().join("project");
+        let outside_dir = temp_dir.path().join("outside");
+        fs::create_dir_all(&project_dir)
+            .await
+            .expect("failed to create project dir");
+        fs::create_dir_all(&outside_dir)
+            .await
+            .expect("failed to create outside dir");
+        symlink(&outside_dir, project_dir.join("link")).expect("failed to create symlink");
+        let db_path = temp_dir.path().join("diffs.db");
+
+        let result = write_project_file(
+            &project_dir,
+            project_file("link/escape.txt", "escaped", false),
+            &db_path,
+            true,
+        )
+        .await;
+
+        assert!(result
+            .unwrap_err()
+            .contains("Symbolic links are not allowed"));
+        assert!(!outside_dir.join("escape.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn allows_configured_project_root_symlink_and_resolves_canonical_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let target_root = temp_dir.path().join("target-root");
+        let project_dir = target_root.join("project");
+        fs::create_dir_all(&project_dir)
+            .await
+            .expect("failed to create target project dir");
+        let linked_root = temp_dir.path().join("linked-root");
+        symlink(&target_root, &linked_root).expect("failed to create root symlink");
+        let linked_project_dir = linked_root.join("project");
+        let db_path = temp_dir.path().join("diffs.db");
+
+        ensure_path_within_project(
+            &linked_project_dir,
+            &linked_project_dir.join("nested/file.txt"),
+        )
+        .await
+        .expect("configured root symlink should be allowed");
+
+        let result = write_project_file(
+            &linked_project_dir,
+            project_file("nested/file.txt", "safe", false),
+            &db_path,
+            true,
+        )
+        .await;
+        assert_eq!(result, Ok(true));
+        assert_eq!(
+            fs::read_to_string(project_dir.join("nested/file.txt"))
+                .await
+                .expect("canonical target output"),
+            "safe"
+        );
+    }
 }
