@@ -173,7 +173,6 @@ async fn sync_project_files(
             Ok(true) => files_processed += 1,
             Ok(false) => {
                 files_skipped += 1;
-                log::info!("Skipped existing file: {}", file_path);
             }
             Err(error) => {
                 log::warn!("Failed to write {}: {}", file_path, error);
